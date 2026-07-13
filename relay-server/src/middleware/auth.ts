@@ -21,7 +21,7 @@ export async function authMiddleware(request: FastifyRequest, reply: FastifyRepl
   if (
     request.method === 'OPTIONS' || 
     (request.url === '/api/health' && request.method === 'GET') ||
-    request.url === '/ws'
+    request.url.split('?')[0] === '/ws'
   ) {
     return;
   }
