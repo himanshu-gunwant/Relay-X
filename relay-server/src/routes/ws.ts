@@ -7,6 +7,8 @@ import { FileChangeEvent } from '../models/file';
 import { GitStatus } from '../models/git';
 import { config } from '../config';
 import { BuildDetectorService, BuildArtifact } from '../services/build-detector';
+import { HardwareMonitorService } from '../services/hardware-monitor';
+import { HardwareTelemetry } from '../models/hardware';
 
 export async function wsRoutes(
   fastify: FastifyInstance,
@@ -15,6 +17,7 @@ export async function wsRoutes(
     fileWatcher?: FileWatcherService;
     gitService?: GitService;
     buildDetector?: BuildDetectorService;
+    hardwareMonitor?: HardwareMonitorService;
   }
 ) {
   fastify.get('/ws', { websocket: true }, (connection: any, req: FastifyRequest) => {
@@ -51,6 +54,12 @@ export async function wsRoutes(
       }
     };
 
+    const onHardwareTelemetry = (telemetry: HardwareTelemetry) => {
+      if (subscriptions.has('hardware')) {
+        socket.send(JSON.stringify({ type: 'hardware_telemetry', data: telemetry }));
+      }
+    };
+
     function processMessage(raw: Buffer | string) {
       try {
         const message = typeof raw === 'string' ? raw : raw.toString('utf-8');
@@ -75,6 +84,9 @@ export async function wsRoutes(
             } else if (channel.kind === 'builds') {
               subscriptions.add('builds');
               console.log(`[WS] Client subscribed to builds`);
+            } else if (channel.kind === 'hardware') {
+              subscriptions.add('hardware');
+              console.log(`[WS] Client subscribed to hardware`);
             }
           }
         } else if (msg.type === 'unsubscribe') {
@@ -90,6 +102,8 @@ export async function wsRoutes(
               subscriptions.delete('git');
             } else if (channel.kind === 'builds') {
               subscriptions.delete('builds');
+            } else if (channel.kind === 'hardware') {
+              subscriptions.delete('hardware');
             }
           }
         }
@@ -126,6 +140,9 @@ export async function wsRoutes(
       if (options.buildDetector) {
         options.buildDetector.removeListener('build:detected', onBuildDetected);
       }
+      if (options.hardwareMonitor) {
+        options.hardwareMonitor.removeListener('hardware:telemetry', onHardwareTelemetry);
+      }
     });
 
     // Now do async auth
@@ -152,6 +169,9 @@ export async function wsRoutes(
       }
       if (options.buildDetector) {
         options.buildDetector.on('build:detected', onBuildDetected);
+      }
+      if (options.hardwareMonitor) {
+        options.hardwareMonitor.on('hardware:telemetry', onHardwareTelemetry);
       }
       
       console.log(`[WS] Auth OK, replaying ${pendingMessages.length} queued messages`);

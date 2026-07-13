@@ -295,13 +295,7 @@ class FileExplorerScreen extends ConsumerWidget {
             );
           }
 
-          // Sort directories first, then files
-          final sortedNodes = [...nodes]..sort((a, b) {
-              if (a.type == b.type) {
-                return a.name.toLowerCase().compareTo(b.name.toLowerCase());
-              }
-              return a.type == 'directory' ? -1 : 1;
-            });
+          final sortedNodes = nodes;
 
           return ListView.separated(
             padding: const EdgeInsets.symmetric(vertical: 8),

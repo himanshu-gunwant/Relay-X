@@ -4,9 +4,11 @@ import { findLanguageServerPid } from '../utils/process.js';
 import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 
+import { APP_ROOT } from '../config.js';
+
 const execAsync = promisify(exec);
 
-const PROFILES_DIR = path.join(process.cwd(), 'credentials', 'profiles');
+const PROFILES_DIR = path.join(APP_ROOT, 'credentials', 'profiles');
 const CREDENTIAL_TARGET = 'gemini:antigravity';
 
 // PowerShell script to READ the credential from Windows Credential Manager
@@ -44,8 +46,8 @@ public class CredReader {
 
 // PowerShell script template to WRITE a credential to Windows Credential Manager
 function makeWriteCredPS(jsonData: string): string {
-  // Escape double quotes for embedding in PowerShell
-  const escaped = jsonData.replace(/"/g, '`"');
+  // Base64 encode to completely eliminate escaping vulnerabilities
+  const base64Data = Buffer.from(jsonData).toString('base64');
   return `
 Add-Type -TypeDefinition @"
 using System;
@@ -61,8 +63,8 @@ public class CredWriter {
         public int Persist; public int AttributeCount; public IntPtr Attributes;
         public string TargetAlias; public string UserName;
     }
-    public static bool Write(string target, string data, string userName) {
-        var bytes = Encoding.UTF8.GetBytes(data);
+    public static bool Write(string target, string b64Data, string userName) {
+        var bytes = Convert.FromBase64String(b64Data);
         var cred = new CREDENTIAL();
         cred.Type = 1;
         cred.TargetName = target;
@@ -77,7 +79,7 @@ public class CredWriter {
     }
 }
 "@
-[CredWriter]::Write("${CREDENTIAL_TARGET}", "${escaped}", "antigravity")
+[CredWriter]::Write("${CREDENTIAL_TARGET}", "${base64Data}", "antigravity")
 `;
 }
 
@@ -141,6 +143,9 @@ async function writeCredential(jsonData: string): Promise<boolean> {
 }
 
 export async function extractAccount(profileName: string, executablePath: string) {
+  if (!/^[a-zA-Z0-9_-]+$/.test(profileName)) {
+    throw new Error('Invalid profile name format');
+  }
   await ensureProfilesDir();
   const profileFile = path.join(PROFILES_DIR, `${profileName}.json`);
 
@@ -176,6 +181,9 @@ export async function listAccounts() {
 }
 
 export async function swapAccount(profileName: string, executablePath: string) {
+  if (!/^[a-zA-Z0-9_-]+$/.test(profileName)) {
+    throw new Error('Invalid profile name format');
+  }
   const profileFile = path.join(PROFILES_DIR, `${profileName}.json`);
   if (!(await fs.stat(profileFile).catch(() => false))) {
     throw new Error(`Profile "${profileName}" does not exist`);

@@ -421,6 +421,18 @@ class ApiClient {
     }
     throw Exception('Failed to load artifacts');
   }
+  // ============ Hardware ============
+
+  Future<Map<String, dynamic>> getHardwareTelemetry() async {
+    try {
+      final response = await _dio.get('/api/hardware/telemetry');
+      return response.data as Map<String, dynamic>;
+    } on Exception catch (e) {
+      throw Exception('Failed to load telemetry: $e');
+    }
+  }
+
+
 }
 
 final apiClientProvider = Provider<ApiClient>((ref) {

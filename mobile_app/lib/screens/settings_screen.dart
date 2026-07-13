@@ -12,6 +12,7 @@ import '../services/api_client.dart';
 import '../widgets/quota_card.dart';
 import '../widgets/appearance_card.dart';
 import '../widgets/account_manager_card.dart';
+import '../providers/hardware_provider.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -212,6 +213,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               children: [
                 _buildSectionHeader('Connection diagnostics'),
                 _buildConnectionStatusCard(relayUrl),
+                
+                const SizedBox(height: 32),
+                _buildSectionHeader('PC Power & Performance'),
+                _buildPowerPerformanceCard(),
                 
                 const SizedBox(height: 32),
                 _buildSectionHeader('Account Quota'),
@@ -699,6 +704,98 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ],
         ),
       ],
+    );
+  }
+
+  Widget _buildPowerPerformanceCard() {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final telemetryAsync = ref.watch(hardwareTelemetryProvider);
+
+    return telemetryAsync.when(
+      loading: () => Container(
+        decoration: BoxDecoration(
+          color: colorScheme.surfaceContainerLowest,
+          border: Border.all(color: colorScheme.outline),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        padding: const EdgeInsets.all(20),
+        child: const Center(
+          child: SizedBox(
+            width: 24,
+            height: 24,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        ),
+      ),
+      error: (err, _) => Container(
+        decoration: BoxDecoration(
+          color: colorScheme.surfaceContainerLowest,
+          border: Border.all(color: colorScheme.outline),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        padding: const EdgeInsets.all(20),
+        child: Row(
+          children: [
+            const Icon(Icons.error_outline, color: Colors.redAccent),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                'Could not load PC telemetry. Make sure the server is running.',
+                style: theme.textTheme.bodySmall,
+              ),
+            ),
+          ],
+        ),
+      ),
+      data: (data) {
+        return Container(
+          decoration: BoxDecoration(
+            color: colorScheme.surfaceContainerLowest,
+            border: Border.all(color: colorScheme.outline),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // System stats
+              Row(
+                children: [
+                  Expanded(
+                    child: Row(
+                      children: [
+                        Icon(Icons.memory, color: colorScheme.primary, size: 18),
+                        const SizedBox(width: 8),
+                        Text(
+                          'CPU Load: ${data.cpu.usagePercent.toStringAsFixed(0)}%',
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Expanded(
+                    child: Row(
+                      children: [
+                        Icon(Icons.pie_chart, color: Colors.purpleAccent, size: 18),
+                        const SizedBox(width: 8),
+                        Text(
+                          'RAM: ${data.ram.usagePercent.toStringAsFixed(0)}%',
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

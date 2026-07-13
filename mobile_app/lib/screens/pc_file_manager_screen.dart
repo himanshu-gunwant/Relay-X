@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/api_client.dart';
@@ -8,6 +9,16 @@ class PcFileManagerScreen extends ConsumerStatefulWidget {
 
   @override
   ConsumerState<PcFileManagerScreen> createState() => _PcFileManagerScreenState();
+}
+
+List<FileNode> _sortNodes(List<FileNode> nodes) {
+  nodes.sort((a, b) {
+    if (a.type == b.type) {
+      return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+    }
+    return a.type == 'directory' ? -1 : 1;
+  });
+  return nodes;
 }
 
 class _PcFileManagerScreenState extends ConsumerState<PcFileManagerScreen> {
@@ -33,12 +44,12 @@ class _PcFileManagerScreenState extends ConsumerState<PcFileManagerScreen> {
       final nodes = await apiClient.getSystemDirectory(path);
       
       // Sort: Folders first, alphabetical
-      nodes.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+      final sortedNodes = await compute(_sortNodes, nodes);
 
       if (mounted) {
         setState(() {
           _currentPath = path;
-          _nodes = nodes;
+          _nodes = sortedNodes;
           _isLoading = false;
         });
       }

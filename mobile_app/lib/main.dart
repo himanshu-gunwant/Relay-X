@@ -19,6 +19,7 @@ import 'services/notification_service.dart';
 import 'services/ssh_service.dart';
 import 'screens/ssh_connections_screen.dart';
 import 'screens/terminal_screen.dart';
+import 'screens/hardware_screen.dart';
 import 'theme/design_system.dart';
 
 void main() async {
@@ -113,6 +114,10 @@ class _MyAppState extends ConsumerState<MyApp> {
             final sessionId = state.pathParameters['sessionId'] ?? '';
             return TerminalScreen(sessionId: sessionId);
           },
+        ),
+        GoRoute(
+          path: '/hardware',
+          builder: (context, state) => const HardwareScreen(),
         ),
       ],
       redirect: (context, state) {

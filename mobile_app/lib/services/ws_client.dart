@@ -30,11 +30,13 @@ class WsClient {
   final _fileChangeController = StreamController<Map<String, dynamic>>.broadcast();
   final _gitStatusController = StreamController<Map<String, dynamic>>.broadcast();
   final _buildController = StreamController<Map<String, dynamic>>.broadcast();
+  final _hardwareController = StreamController<Map<String, dynamic>>.broadcast();
 
   Stream<TranscriptEvent> get transcriptStream => _transcriptController.stream;
   Stream<Map<String, dynamic>> get fileChangeStream => _fileChangeController.stream;
   Stream<Map<String, dynamic>> get gitStatusStream => _gitStatusController.stream;
   Stream<Map<String, dynamic>> get buildStream => _buildController.stream;
+  Stream<Map<String, dynamic>> get hardwareStream => _hardwareController.stream;
 
   int _reconnectAttempts = 0;
   Timer? _reconnectTimer;
@@ -92,7 +94,8 @@ class WsClient {
       'channels': [
         {'kind': 'files'},
         {'kind': 'git'},
-        {'kind': 'builds'}
+        {'kind': 'builds'},
+        {'kind': 'hardware'}
       ]
     }));
 
@@ -122,6 +125,8 @@ class WsClient {
         _gitStatusController.add(decoded['data'] as Map<String, dynamic>);
       } else if (decoded['type'] == 'build_detected') {
         _buildController.add(decoded['data'] as Map<String, dynamic>);
+      } else if (decoded['type'] == 'hardware_telemetry' && decoded['data'] != null) {
+        _hardwareController.add(decoded['data'] as Map<String, dynamic>);
       } else if (decoded['type'] == 'daemon_status' && decoded['data'] != null) {
         _isDaemonActive = decoded['data']['active'] as bool? ?? true;
         _daemonStatusController.add(_isDaemonActive);
@@ -177,6 +182,7 @@ class WsClient {
     _fileChangeController.close();
     _gitStatusController.close();
     _buildController.close();
+    _hardwareController.close();
   }
 }
 

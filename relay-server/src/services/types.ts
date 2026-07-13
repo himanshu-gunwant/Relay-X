@@ -15,6 +15,7 @@ export interface RelayEvents {
   'file:change': (event: FileChangeEvent) => void;
   'git:status-change': (status: GitStatus) => void;
   'build:detected': (artifact: BuildArtifact) => void;
+  'hardware:telemetry': (telemetry: import('../models/hardware').HardwareTelemetry) => void;
   'notification:send': (payload: NotificationPayload) => void;
 }
 

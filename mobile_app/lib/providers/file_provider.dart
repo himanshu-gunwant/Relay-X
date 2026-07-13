@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/file_node.dart';
 import '../services/api_client.dart';
@@ -29,7 +30,17 @@ final customDownloadLocationProvider = NotifierProvider<CustomDownloadLocationNo
   return CustomDownloadLocationNotifier();
 });
 
-final filesProvider = FutureProvider.family<List<FileNode>, String>((ref, path) {
+List<FileNode> _sortNodes(List<FileNode> nodes) {
+  nodes.sort((a, b) {
+    if (a.type == b.type) {
+      return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+    }
+    return a.type == 'directory' ? -1 : 1;
+  });
+  return nodes;
+}
+
+final filesProvider = FutureProvider.family<List<FileNode>, String>((ref, path) async {
   final apiClient = ref.watch(apiClientProvider);
   final workspace = ref.watch(activeWorkspaceProvider);
   
@@ -44,7 +55,8 @@ final filesProvider = FutureProvider.family<List<FileNode>, String>((ref, path) 
   });
   ref.onDispose(() => sub.cancel());
 
-  return apiClient.listFiles(path: path, workspace: workspace.isEmpty ? null : workspace);
+  final nodes = await apiClient.listFiles(path: path, workspace: workspace.isEmpty ? null : workspace);
+  return compute(_sortNodes, nodes);
 });
 
 final fileContentProvider = FutureProvider.family<Map<String, dynamic>, String>((ref, path) {

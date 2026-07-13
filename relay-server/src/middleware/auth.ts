@@ -6,13 +6,22 @@ const API_KEY_HEADER = 'x-relay-api-key';
 
 const keyCache = new Map<string, { valid: boolean, expires: number }>();
 
+// Sweep cache every 5 minutes to prevent memory leaks
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of keyCache.entries()) {
+    if (v.expires <= now) {
+      keyCache.delete(k);
+    }
+  }
+}, 5 * 60 * 1000).unref();
+
 export async function authMiddleware(request: FastifyRequest, reply: FastifyReply) {
   // Allow options requests, health endpoint, or the websocket endpoint without header-based auth
   if (
     request.method === 'OPTIONS' || 
     (request.url === '/api/health' && request.method === 'GET') ||
-    (request.url === '/api/test-notification' && request.method === 'POST') ||
-    request.url.startsWith('/ws')
+    request.url === '/ws'
   ) {
     return;
   }

@@ -1,13 +1,13 @@
 import 'dart:async';
+import 'dart:convert';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../services/ws_client.dart';
 import '../services/api_client.dart';
 import '../models/event.dart';
-import '../theme/design_system.dart';
 import '../widgets/app_sidebar.dart';
 import '../widgets/overview_drawer.dart';
 
@@ -373,7 +373,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Theme.of(context).colorScheme.background,
+      backgroundColor: Theme.of(context).colorScheme.surface,
       drawer: AppSidebar(
         onConversationSelected: _loadConversation,
         onNewConversation: _startNewConversation,
@@ -398,7 +398,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             right: 0,
             height: MediaQuery.paddingOf(context).top,
             child: Container(
-              color: Theme.of(context).colorScheme.background,
+              color: Theme.of(context).colorScheme.surface,
             ),
           ),
           
@@ -685,9 +685,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final cat = event.category.toLowerCase();
     if (cat == 'user_message') {
       final parsedTime = DateTime.tryParse(event.timestamp);
-      return _buildUserBubble(event.content ?? event.summary, parsedTime);
+      return UserMessageBubble(text: event.content ?? event.summary, timestamp: parsedTime);
     } else if (cat == 'agent_response') {
-      return _buildAgentBubble(event.content ?? event.summary, event);
+      return AgentMessageBubble(text: event.content ?? event.summary, event: event);
     } else if (cat == 'tool_invocation') {
       final isDone = event.status.toLowerCase() == 'done';
       return _buildToolCallCard(event, isProcessing: !isDone);
@@ -698,97 +698,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
   }
 
-  Widget _buildUserBubble(String text, DateTime? timestamp) {
-    final timeStr = timestamp != null
-        ? "${timestamp.hour.toString().padLeft(2, '0')}:${timestamp.minute.toString().padLeft(2, '0')}"
-        : "";
 
-    return Align(
-      alignment: Alignment.centerRight,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          Container(
-            constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * 0.85),
-            padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 14.0),
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surfaceContainerHigh,
-              border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
-              borderRadius: const BorderRadius.only(
-                topLeft: Radius.circular(16.0),
-                bottomLeft: Radius.circular(16.0),
-                bottomRight: Radius.circular(16.0),
-                topRight: Radius.zero,
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: Theme.of(context).colorScheme.shadow.withValues(alpha: 0.15),
-                  blurRadius: 4,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
-            child: Text(
-              text,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: Theme.of(context).colorScheme.onSurface,
-                fontWeight: FontWeight.w500,
-                height: 1.3,
-              ),
-            ),
-          ),
-          if (timeStr.isNotEmpty) ...[
-            const SizedBox(height: 4),
-            Padding(
-              padding: const EdgeInsets.only(right: 4.0),
-              child: Text(
-                timeStr,
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  fontSize: 10,
-                  color: Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
-                ),
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildAgentBubble(String text, TranscriptEvent event) {
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: Container(
-        constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * 0.95),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            MarkdownBody(
-              data: text.isEmpty ? '...' : text,
-              styleSheet: MarkdownStyleSheet(
-                p: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                  fontSize: 17,
-                  color: Theme.of(context).colorScheme.onSurface,
-                  height: 1.5,
-                  fontWeight: FontWeight.normal,
-                ),
-                code: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Theme.of(context).colorScheme.secondary,
-                  backgroundColor: Colors.transparent,
-                ),
-                codeblockDecoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.surfaceContainerLowest,
-                  borderRadius: BorderRadius.circular(8.0),
-                  border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
-                ),
-                codeblockPadding: const EdgeInsets.all(16.0),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 
   Widget _buildToolCallCard(TranscriptEvent event, {required bool isProcessing}) {
     final toolName = event.toolCalls?.first.summary ?? event.summary;
@@ -997,7 +907,47 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 children: [
                   IconButton(
                     icon: const Icon(Icons.add, color: Color(0xFF999999), size: 22),
-                    onPressed: () {},
+                    onPressed: () async {
+                      try {
+                        FilePickerResult? result = await FilePicker.platform.pickFiles(
+                          type: FileType.image,
+                          withData: true,
+                        );
+                        if (result != null && result.files.isNotEmpty) {
+                          final file = result.files.first;
+                          if (file.bytes != null) {
+                            final base64Content = base64Encode(file.bytes!);
+                            final fileName = file.name.replaceAll(RegExp(r'\s+'), '_');
+                            final uploadPath = '.system_generated/artifacts/scratch/$fileName';
+                            
+                            final apiClient = ref.read(apiClientProvider);
+                            await apiClient.createFileOrFolder(
+                              path: uploadPath,
+                              type: 'file',
+                              content: base64Content,
+                              base64Encoded: true,
+                            );
+                            
+                            final text = _messageController.text;
+                            final selection = _messageController.selection;
+                            final insertText = '![Image]($uploadPath) ';
+                            
+                            if (selection.isValid && selection.start >= 0) {
+                              _messageController.value = TextEditingValue(
+                                text: text.replaceRange(selection.start, selection.end, insertText),
+                                selection: TextSelection.collapsed(offset: selection.start + insertText.length),
+                              );
+                            } else {
+                              _messageController.text = text + insertText;
+                            }
+                          }
+                        }
+                      } catch (e) {
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to upload image: $e')));
+                        }
+                      }
+                    },
                     constraints: const BoxConstraints(),
                     padding: const EdgeInsets.symmetric(horizontal: 8),
                   ),
@@ -1324,3 +1274,110 @@ class _ProcessGroupCardState extends State<ProcessGroupCard> {
   }
 }
 
+class UserMessageBubble extends StatelessWidget {
+  final String text;
+  final DateTime? timestamp;
+
+  const UserMessageBubble({super.key, required this.text, this.timestamp});
+
+  @override
+  Widget build(BuildContext context) {
+    final timeStr = timestamp != null
+        ? "${timestamp!.hour.toString().padLeft(2, '0')}:${timestamp!.minute.toString().padLeft(2, '0')}"
+        : "";
+
+    return Align(
+      alignment: Alignment.centerRight,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Container(
+            constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * 0.85),
+            padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 14.0),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surfaceContainerHigh,
+              border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(16.0),
+                bottomLeft: Radius.circular(16.0),
+                bottomRight: Radius.circular(16.0),
+                topRight: Radius.zero,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Theme.of(context).colorScheme.shadow.withValues(alpha: 0.15),
+                  blurRadius: 4,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Text(
+              text,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: Theme.of(context).colorScheme.onSurface,
+                fontWeight: FontWeight.w500,
+                height: 1.3,
+              ),
+            ),
+          ),
+          if (timeStr.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Padding(
+              padding: const EdgeInsets.only(right: 4.0),
+              child: Text(
+                timeStr,
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  fontSize: 10,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class AgentMessageBubble extends StatelessWidget {
+  final String text;
+  final TranscriptEvent event;
+
+  const AgentMessageBubble({super.key, required this.text, required this.event});
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * 0.95),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            MarkdownBody(
+              data: text.isEmpty ? '...' : text,
+              styleSheet: MarkdownStyleSheet(
+                p: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                  fontSize: 17,
+                  color: Theme.of(context).colorScheme.onSurface,
+                  height: 1.5,
+                  fontWeight: FontWeight.normal,
+                ),
+                code: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.secondary,
+                  backgroundColor: Colors.transparent,
+                ),
+                codeblockDecoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surfaceContainerLowest,
+                  borderRadius: BorderRadius.circular(8.0),
+                  border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+                ),
+                codeblockPadding: const EdgeInsets.all(16.0),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

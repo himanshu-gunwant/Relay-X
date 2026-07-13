@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import Fastify from 'fastify';
 import { spawn } from 'child_process';
 import { discover } from './bootstrap/discovery.js';
@@ -18,8 +19,31 @@ import { NotificationService } from './services/notification.js';
 import { buildRoutes } from './routes/builds.js';
 import { notificationRoutes } from './routes/notifications.js';
 import { accountsRoute } from './routes/accounts.js';
+import { HardwareMonitorService } from './services/hardware-monitor.js';
+import { hardwareRoutes } from './routes/hardware.js';
 import fastifyWebsocket from '@fastify/websocket';
 import { errorHandler } from './middleware/error-handler.js';
+import fs from 'fs';
+import path from 'path';
+import { APP_ROOT } from './config.js';
+
+// Startup Diagnostics and Validation
+const envPath = path.join(APP_ROOT, '.env');
+const profilesDir = path.join(APP_ROOT, 'credentials', 'profiles');
+
+if (!fs.existsSync(envPath)) {
+  console.error(`[Fatal] Missing Environment File: ${envPath}`);
+  process.exit(1);
+}
+
+if (!fs.existsSync(profilesDir)) {
+  console.error(`[Fatal] Missing Profiles Directory: ${profilesDir}`);
+  process.exit(1);
+}
+
+console.log(`Antigravity Root: ${APP_ROOT}`);
+console.log(`Environment File: ${envPath}`);
+console.log(`Profiles Directory: ${profilesDir}`);
 
 const fastify = Fastify({
   ignoreTrailingSlash: true,
@@ -39,7 +63,34 @@ fastify.setErrorHandler(errorHandler);
 async function main() {
   try {
     console.log('[Bootstrap] Discovering Antigravity runtime...');
-    const ctx = await discover(config.workspaceDir);
+    let ctx;
+    try {
+      ctx = await discover(config.workspaceDir);
+    } catch (e) {
+      console.log('[Bootstrap] Antigravity not found running. Attempting to launch it...');
+      const exePath = config.antigravityExePath;
+      if (fs.existsSync(exePath)) {
+        const p = spawn(exePath, [], { detached: true, stdio: 'ignore' });
+        p.unref();
+        
+        let attempts = 0;
+        while (attempts < 15) {
+          await new Promise(r => setTimeout(r, 2000));
+          try {
+            console.log(`[Bootstrap] Polling for Antigravity runtime (attempt ${attempts + 1})...`);
+            ctx = await discover(config.workspaceDir);
+            break;
+          } catch (pollErr) {
+            attempts++;
+          }
+        }
+        if (!ctx) {
+          throw new Error('Timed out waiting for Antigravity to boot up');
+        }
+      } else {
+        throw new Error(`Antigravity executable not found at ${exePath} and not currently running.`);
+      }
+    }
     console.log(`[Bootstrap] Successfully discovered Antigravity! PID: ${ctx.pid}, Ports: ${ctx.lsPorts.join(', ')}, Project ID: ${ctx.projectId}`);
 
     // Initialize and start services
@@ -49,7 +100,8 @@ async function main() {
     const gitService = new GitService();
     const buildDetector = new BuildDetectorService();
     const notificationService = new NotificationService();
-    const healthMonitor = new HealthMonitor([agentapi, transcripts, fileWatcher, gitService, buildDetector, notificationService]);
+    const hardwareMonitor = new HardwareMonitorService();
+    const healthMonitor = new HealthMonitor([agentapi, transcripts, fileWatcher, gitService, buildDetector, notificationService, hardwareMonitor]);
 
     await agentapi.start(ctx);
     await transcripts.start(ctx);
@@ -57,6 +109,7 @@ async function main() {
     await gitService.start(ctx);
     await buildDetector.start(ctx);
     await notificationService.start(ctx);
+    await hardwareMonitor.start(ctx);
     await healthMonitor.start(ctx);
 
     // Event hooks
@@ -102,6 +155,11 @@ async function main() {
       if (!execPath) {
         return reply.code(400).send({ success: false, error: 'executablePath is required' });
       }
+      
+      // Security fix: strictly validate the path
+      if (execPath !== config.antigravityExePath) {
+        return reply.code(403).send({ success: false, error: 'Unauthorized executable path' });
+      }
 
       console.log(`[System] Attempting to manually restart daemon...`);
       try {
@@ -122,7 +180,7 @@ async function main() {
         }
 
         console.log(`[System] Spawning fresh daemon from: ${execPath}`);
-        const p = spawn(execPath, [], { detached: true, shell: true, stdio: 'ignore' });
+        const p = spawn(execPath, [], { detached: true, stdio: 'ignore' });
         p.unref(); // allow the relay server to exit independently
         return { success: true };
       } catch (err: any) {
@@ -185,11 +243,17 @@ async function main() {
       prefix: '/api/accounts'
     });
 
+    fastify.register(hardwareRoutes, {
+      prefix: '/api/hardware',
+      hardwareMonitor
+    });
+
     fastify.register(wsRoutes, {
       transcripts,
       fileWatcher,
       gitService,
-      buildDetector
+      buildDetector,
+      hardwareMonitor
     });
 
     fastify.get('/api/health', async (request, reply) => {
@@ -213,6 +277,7 @@ async function main() {
       await fileWatcher.stop();
       await gitService.stop();
       await transcripts.stop();
+      await hardwareMonitor.stop();
       await healthMonitor.stop();
       await agentapi.stop();
       await fastify.close();

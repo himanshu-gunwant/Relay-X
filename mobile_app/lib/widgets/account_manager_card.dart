@@ -71,6 +71,7 @@ class _AccountManagerCardState extends ConsumerState<AccountManagerCard> {
       setState(() => _isLoading = true);
       final apiClient = ref.read(apiClientProvider);
       final success = await apiClient.extractAccount(profileName, execPath);
+      if (!mounted) return;
       
       if (success) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -114,12 +115,14 @@ class _AccountManagerCardState extends ConsumerState<AccountManagerCard> {
     );
 
     if (confirm == true) {
+      if (!mounted) return;
       setState(() => _isLoading = true);
       final apiClient = ref.read(apiClientProvider);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Switching to "$profileName"...')),
       );
       final success = await apiClient.swapAccount(profileName, execPath);
+      if (!mounted) return;
       
       setState(() => _isLoading = false);
       if (success) {
