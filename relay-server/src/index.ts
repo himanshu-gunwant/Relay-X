@@ -66,32 +66,23 @@ async function main() {
     let ctx;
     try {
       ctx = await discover(config.workspaceDir);
+      console.log(`[Bootstrap] Successfully discovered Antigravity! PID: ${ctx.pid}, Ports: ${ctx.lsPorts.join(', ')}, Project ID: ${ctx.projectId}`);
     } catch (e) {
-      console.log('[Bootstrap] Antigravity not found running. Attempting to launch it...');
-      const exePath = config.antigravityExePath;
-      if (fs.existsSync(exePath)) {
-        const p = spawn(exePath, [], { detached: true, stdio: 'ignore' });
-        p.unref();
-        
-        let attempts = 0;
-        while (attempts < 15) {
-          await new Promise(r => setTimeout(r, 2000));
-          try {
-            console.log(`[Bootstrap] Polling for Antigravity runtime (attempt ${attempts + 1})...`);
-            ctx = await discover(config.workspaceDir);
-            break;
-          } catch (pollErr) {
-            attempts++;
-          }
-        }
-        if (!ctx) {
-          throw new Error('Timed out waiting for Antigravity to boot up');
-        }
-      } else {
-        throw new Error(`Antigravity executable not found at ${exePath} and not currently running.`);
-      }
+      console.log('[Bootstrap] Antigravity not found running. Starting in standalone/listening mode.');
+      const os = await import('os');
+      ctx = {
+        pid: 0,
+        csrfToken: '',
+        lsPorts: [],
+        projectId: '',
+        agentapiBat: '',
+        brainDir: path.join(os.homedir(), '.gemini', 'antigravity', 'brain'),
+        workspaceDir: config.workspaceDir,
+        cdpWsUrl: null,
+        ideVersion: '',
+        discoveredAt: new Date(0)
+      };
     }
-    console.log(`[Bootstrap] Successfully discovered Antigravity! PID: ${ctx.pid}, Ports: ${ctx.lsPorts.join(', ')}, Project ID: ${ctx.projectId}`);
 
     // Initialize and start services
     const agentapi = new AgentapiService();
