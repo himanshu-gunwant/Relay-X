@@ -30,7 +30,7 @@ export class TranscriptWatcherService extends EventEmitter implements Service {
     // and filter to only transcript_full.jsonl files in event handlers.
     this.watcher = chokidar.watch(this.brainDir, {
       persistent: true,
-      ignoreInitial: false,
+      ignoreInitial: true,
       awaitWriteFinish: {
         stabilityThreshold: 200,
         pollInterval: 100

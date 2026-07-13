@@ -251,22 +251,26 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       if (!mounted) return;
       if (event.conversationId != _conversationId) return;
       
-      // De-duplicate by stepIndex (history replay can send same steps)
-      if (_seenStepIndices.contains(event.stepIndex)) return;
-      _seenStepIndices.add(event.stepIndex);
-
       setState(() {
-        int low = 0;
-        int high = _events.length - 1;
-        while (low <= high) {
-          int mid = low + ((high - low) >> 1);
-          if (_events[mid].stepIndex < event.stepIndex) {
-            low = mid + 1;
-          } else {
-            high = mid - 1;
+        if (_seenStepIndices.contains(event.stepIndex)) {
+          final index = _events.indexWhere((e) => e.stepIndex == event.stepIndex);
+          if (index != -1) {
+            _events[index] = event;
           }
+        } else {
+          _seenStepIndices.add(event.stepIndex);
+          int low = 0;
+          int high = _events.length - 1;
+          while (low <= high) {
+            int mid = low + ((high - low) >> 1);
+            if (_events[mid].stepIndex < event.stepIndex) {
+              low = mid + 1;
+            } else {
+              high = mid - 1;
+            }
+          }
+          _events.insert(low, event);
         }
-        _events.insert(low, event);
         _displayItemsDirty = true;
       });
       WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
@@ -523,7 +527,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       final cat = event.category.toLowerCase();
       final source = event.source.toUpperCase();
 
-      if ((cat == 'user_message' && source == 'USER_EXPLICIT') || cat == 'agent_response') {
+      if ((cat == 'user_message' && (source == 'USER' || source == 'USER_EXPLICIT')) || cat == 'agent_response') {
         if (currentGroup.isNotEmpty) {
           items.add(ProcessGroup(
             events: currentGroup.toList(),
