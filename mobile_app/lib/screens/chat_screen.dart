@@ -153,9 +153,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       _hasMoreHistory = true;
       _isLoadingHistory = false;
     });
-    if (ws.connectionState == WsConnectionState.connected) {
-      ws.subscribe(id);
-    }
+    ws.subscribe(id);
     
     // Fetch conversation metadata to get workspace path
     ref.read(apiClientProvider).getConversationMetadata(id).then((meta) {
