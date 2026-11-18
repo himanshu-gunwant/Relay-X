@@ -7,6 +7,7 @@ import 'package:timeago/timeago.dart' as timeago;
 import '../providers/config_provider.dart';
 import '../providers/conversations_provider.dart';
 import '../services/api_client.dart';
+import '../services/wol_service.dart';
 import '../widgets/app_sidebar.dart';
 import '../theme/design_system.dart';
 
@@ -31,11 +32,76 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
 
   Future<void> _checkHealth() async {
     final client = ref.read(apiClientProvider);
-    final healthy = await client.checkHealth();
+    final healthy = await client.checkHealth(
+      onMacDiscovered: (mac) {
+        final currentMac = ref.read(configProvider).value?.macAddress ?? '';
+        if (currentMac.isEmpty) {
+          ref.read(configProvider.notifier).saveMacAddress(mac);
+        }
+      },
+    );
     if (mounted) {
       setState(() {
         _isServerHealthy = healthy;
       });
+    }
+  }
+
+  Future<void> _wakePc() async {
+    final config = ref.read(configProvider).value;
+    final macAddress = config?.macAddress ?? '';
+    if (macAddress.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('No target MAC address saved yet.'),
+          action: SnackBarAction(
+            label: 'Settings',
+            onPressed: () => context.push('/settings'),
+          ),
+        ),
+      );
+      return;
+    }
+
+    final targetIps = <String>{'255.255.255.255'};
+    if (config != null) {
+      if (config.wolBroadcastIp.isNotEmpty) {
+        targetIps.add(config.wolBroadcastIp);
+      }
+      final derivedSubnet = WakeOnLanService.deriveSubnetBroadcastIp(config.relayUrl);
+      if (derivedSubnet != null) {
+        targetIps.add(derivedSubnet);
+      }
+      final hostIp = WakeOnLanService.deriveHostIp(config.relayUrl);
+      if (hostIp != null) {
+        targetIps.add(hostIp);
+      }
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Sending Wake-on-LAN Magic Packet...')),
+    );
+
+    final success = await WakeOnLanService.sendWakeOnLan(
+      macAddress,
+      targetIps: targetIps.toList(),
+    );
+    if (!mounted) return;
+
+    if (success) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Magic packet sent to ${targetIps.join(", ")}! Waiting for PC...'),
+          backgroundColor: Colors.green.shade800,
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Failed to send Wake-on-LAN packet.'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
     }
   }
 
@@ -103,10 +169,10 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                     child: _buildStatusCard(
                       context: context,
                       title: 'Server Status',
-                      subtitle: _isServerHealthy ? 'Connected' : 'Disconnected',
-                      icon: _isServerHealthy ? Icons.check_circle : Icons.error,
+                      subtitle: _isServerHealthy ? 'Connected' : 'Offline (Tap to Wake)',
+                      icon: _isServerHealthy ? Icons.check_circle : Icons.power_settings_new_rounded,
                       color: _isServerHealthy ? Colors.green : colorScheme.error,
-                      onTap: () {},
+                      onTap: _isServerHealthy ? () => context.push('/settings') : _wakePc,
                     ),
                   ),
                   const SizedBox(width: 16),
@@ -171,7 +237,14 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                           ElevatedButton.icon(
                             icon: const Icon(Icons.add),
                             label: const Text('Create New Project'),
-                            onPressed: () => context.push('/pc_file_manager'),
+                            onPressed: () async {
+                              final path = await context.push<String>('/pc_file_manager');
+                              if (path != null && path.isNotEmpty) {
+                                if (mounted) {
+                                  this.context.push('/chat?workspace=$path');
+                                }
+                              }
+                            },
                           )
                         ],
                       ),
@@ -207,11 +280,19 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                             '${chats.length} chat${chats.length == 1 ? '' : 's'}',
                             style: TextStyle(color: colorScheme.onSurfaceVariant, fontSize: 12),
                           ),
-                          children: chats.map((chat) {
-                            final updatedAt = DateTime.parse(chat['updatedAt']).toLocal();
-                            return InkWell(
+                          children: [
+                            InkWell(
                               onTap: () {
-                                context.push('/chat?id=${chat['id']}');
+                                final firstChatWithWorkspace = chats.firstWhere(
+                                  (c) => c['workspace'] != null && (c['workspace'] as String).isNotEmpty,
+                                  orElse: () => <String, dynamic>{},
+                                );
+                                final workspacePath = firstChatWithWorkspace['workspace'] as String?;
+                                if (workspacePath != null && workspacePath.isNotEmpty) {
+                                  context.push('/chat?workspace=$workspacePath');
+                                } else {
+                                  context.push('/chat');
+                                }
                               },
                               child: Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -221,32 +302,61 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                                 ),
                                 child: Row(
                                   children: [
-                                    Icon(Icons.chat_bubble_outline, size: 16, color: colorScheme.secondary),
+                                    Icon(Icons.add, size: 16, color: colorScheme.primary),
                                     const SizedBox(width: 12),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            chat['title'] ?? 'New Chat',
-                                            style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 14),
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            timeago.format(updatedAt),
-                                            style: TextStyle(color: colorScheme.onSurfaceVariant, fontSize: 12),
-                                          ),
-                                        ],
+                                    Text(
+                                      'Start New Chat in this Project',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 14,
+                                        color: colorScheme.primary,
                                       ),
                                     ),
-                                    Icon(Icons.chevron_right, size: 16, color: colorScheme.onSurfaceVariant),
                                   ],
                                 ),
                               ),
-                            );
-                          }).toList(),
+                            ),
+                            ...chats.map((chat) {
+                              final updatedAt = DateTime.parse(chat['updatedAt']).toLocal();
+                              return InkWell(
+                                onTap: () {
+                                  context.push('/chat?id=${chat['id']}');
+                                },
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                                  decoration: BoxDecoration(
+                                    border: Border(top: BorderSide(color: colorScheme.outlineVariant.withAlpha(50))),
+                                    color: colorScheme.surfaceContainerLowest,
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Icon(Icons.chat_bubble_outline, size: 16, color: colorScheme.secondary),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              chat['title'] ?? 'New Chat',
+                                              style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 14),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              timeago.format(updatedAt),
+                                              style: TextStyle(color: colorScheme.onSurfaceVariant, fontSize: 12),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      Icon(Icons.chevron_right, size: 16, color: colorScheme.onSurfaceVariant),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            }),
+                          ],
                         ),
                       );
                     }).toList(),

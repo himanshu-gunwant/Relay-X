@@ -1,20 +1,21 @@
 import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/legacy.dart';
 import '../models/build_artifact.dart';
 import '../repositories/build_repository.dart';
 import '../services/ws_client.dart';
 
-final buildsProvider = FutureProvider<List<BuildArtifact>>((ref) {
+final activeBuildWorkspaceProvider = StateProvider<String?>((ref) => null);
+
+final buildsProvider = FutureProvider<List<BuildArtifact>>((ref) async {
   final repo = ref.watch(buildRepositoryProvider);
+  final workspace = ref.watch(activeBuildWorkspaceProvider);
 
-  // Auto-refresh when new builds are detected
-  final wsClient = ref.watch(wsClientProvider);
-  final sub = wsClient.buildStream.listen((event) {
-    ref.invalidateSelf();
-  });
-  ref.onDispose(() => sub.cancel());
+  if (workspace == null || workspace.isEmpty) {
+    return [];
+  }
 
-  return repo.listBuilds();
+  return repo.listBuilds(workspace);
 });
 
 class BuildStatusNotifier extends Notifier<String> {
@@ -29,6 +30,7 @@ class BuildStatusNotifier extends Notifier<String> {
     final wsClient = ref.read(wsClientProvider);
     _sub = wsClient.buildStream.listen((event) {
       state = 'Completed';
+      ref.invalidate(buildsProvider);
       _scheduleReset();
     });
 

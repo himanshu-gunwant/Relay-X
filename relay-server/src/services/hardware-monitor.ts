@@ -1,3 +1,4 @@
+import os from 'os';
 import { EventEmitter } from 'events';
 import { Service } from './types.js';
 import { AntigravityContext } from '../bootstrap/types.js';
@@ -10,6 +11,22 @@ import { config } from '../config.js';
 import { HardwareTelemetry, FanMode, PerformanceMode } from '../models/hardware.js';
 
 const execAsync = promisify(exec);
+
+export function getPrimaryMacAddress(): string | null {
+  try {
+    const interfaces = os.networkInterfaces();
+    for (const name of Object.keys(interfaces)) {
+      const netList = interfaces[name];
+      if (!netList) continue;
+      for (const net of netList) {
+        if (!net.internal && net.mac && net.mac !== '00:00:00:00:00:00') {
+          return net.mac;
+        }
+      }
+    }
+  } catch (e) {}
+  return null;
+}
 
 // OmenMon support removed.
 
@@ -110,6 +127,7 @@ export class HardwareMonitorService extends EventEmitter implements Service {
         max: this.isFanMaxActive,
         fans: []
       },
+      macAddress: getPrimaryMacAddress(),
       timestamp: Date.now()
     };
   }

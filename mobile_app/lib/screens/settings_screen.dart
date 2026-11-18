@@ -9,6 +9,8 @@ import '../providers/file_provider.dart';
 import '../providers/config_provider.dart';
 import '../providers/artifact_cache_provider.dart';
 import '../services/api_client.dart';
+import '../services/wol_service.dart';
+import '../services/notification_service.dart';
 import '../widgets/quota_card.dart';
 import '../widgets/appearance_card.dart';
 import '../widgets/account_manager_card.dart';
@@ -46,7 +48,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
     final stopwatch = Stopwatch()..start();
     final apiClient = ref.read(apiClientProvider);
-    final isHealthy = await apiClient.checkHealth();
+    final isHealthy = await apiClient.checkHealth(
+      onMacDiscovered: (mac) {
+        final currentMac = ref.read(configProvider).value?.macAddress ?? '';
+        if (currentMac.isEmpty) {
+          ref.read(configProvider.notifier).saveMacAddress(mac);
+        }
+      },
+    );
     stopwatch.stop();
 
     if (mounted) {
@@ -215,6 +224,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 _buildConnectionStatusCard(relayUrl),
                 
                 const SizedBox(height: 32),
+                _buildSectionHeader('Wake-on-LAN (WoL)'),
+                _buildWakeOnLanCard(),
+
+                const SizedBox(height: 32),
                 _buildSectionHeader('PC Power & Performance'),
                 _buildPowerPerformanceCard(),
                 
@@ -233,6 +246,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 const SizedBox(height: 32),
                 _buildSectionHeader('Preferences'),
                 _buildPreferencesCard(),
+
+                const SizedBox(height: 32),
+                _buildSectionHeader('Push Notifications'),
+                _buildPushNotificationsCard(),
                 
                 const SizedBox(height: 32),
                 _buildSectionHeader('Cache & Storage'),
@@ -449,6 +466,263 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
   }
 
+  void _editMacAddress(String currentMac) {
+    final controller = TextEditingController(text: currentMac);
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Target MAC Address'),
+          content: TextField(
+            controller: controller,
+            decoration: const InputDecoration(
+              hintText: 'AA:BB:CC:DD:EE:FF',
+              border: OutlineInputBorder(),
+              helperText: 'Enter 12-digit hex MAC address',
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => context.pop(),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () {
+                final newMac = controller.text.trim();
+                if (newMac.isNotEmpty && !WakeOnLanService.isValidMacAddress(newMac)) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Invalid MAC address format (must be 12 hex digits)')),
+                  );
+                  return;
+                }
+                ref.read(configProvider.notifier).saveMacAddress(newMac);
+                context.pop();
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _editWolBroadcastIp(String currentIp) {
+    final controller = TextEditingController(text: currentIp);
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Broadcast IP / Subnet'),
+          content: TextField(
+            controller: controller,
+            decoration: const InputDecoration(
+              hintText: '192.168.1.255',
+              border: OutlineInputBorder(),
+              helperText: 'e.g. 192.168.1.255 (for cross-router sending)',
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => context.pop(),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () {
+                final newIp = controller.text.trim();
+                ref.read(configProvider.notifier).saveWolBroadcastIp(newIp);
+                context.pop();
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _sendWolPacket(String macAddress) async {
+    if (macAddress.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please set or auto-discover a target MAC address first.')),
+      );
+      return;
+    }
+
+    final config = ref.read(configProvider).value;
+    final targetIps = <String>{'255.255.255.255'};
+
+    if (config != null) {
+      if (config.wolBroadcastIp.isNotEmpty) {
+        targetIps.add(config.wolBroadcastIp);
+      }
+      final derivedSubnet = WakeOnLanService.deriveSubnetBroadcastIp(config.relayUrl);
+      if (derivedSubnet != null) {
+        targetIps.add(derivedSubnet);
+      }
+      final hostIp = WakeOnLanService.deriveHostIp(config.relayUrl);
+      if (hostIp != null) {
+        targetIps.add(hostIp);
+      }
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Sending Wake-on-LAN Magic Packet...')),
+    );
+
+    final success = await WakeOnLanService.sendWakeOnLan(
+      macAddress,
+      targetIps: targetIps.toList(),
+    );
+    if (!mounted) return;
+
+    if (success) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Magic packet sent to ${targetIps.join(", ")}! Waiting for PC...'),
+          backgroundColor: Colors.green.shade800,
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Failed to send Wake-on-LAN packet. Check network connection.'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
+  }
+
+  Widget _buildWakeOnLanCard() {
+    final colorScheme = Theme.of(context).colorScheme;
+    final config = ref.watch(configProvider).value;
+    final macAddress = config?.macAddress ?? '';
+    final customBroadcastIp = config?.wolBroadcastIp ?? '';
+    final derivedSubnet = config != null ? WakeOnLanService.deriveSubnetBroadcastIp(config.relayUrl) : null;
+    
+    final formattedMac = macAddress.isNotEmpty
+        ? WakeOnLanService.formatMacAddress(macAddress)
+        : 'Not configured / Auto-discovers on connection';
+        
+    final activeBroadcastDisplay = customBroadcastIp.isNotEmpty
+        ? customBroadcastIp
+        : (derivedSubnet ?? '255.255.255.255');
+
+    return Container(
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerLowest,
+        border: Border.all(color: colorScheme.outline),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.power_settings_new_rounded, color: colorScheme.primary, size: 22),
+              const SizedBox(width: 10),
+              Text(
+                'Wake-on-LAN (WoL)',
+                style: TextStyle(
+                  color: colorScheme.onSurface,
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            'Target MAC Address:',
+            style: TextStyle(
+              color: colorScheme.onSurfaceVariant,
+              fontSize: 12,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Expanded(
+                child: Text(
+                  formattedMac,
+                  style: TextStyle(
+                    color: macAddress.isNotEmpty ? colorScheme.onSurface : colorScheme.onSurfaceVariant.withValues(alpha: 0.6),
+                    fontSize: 14,
+                    fontFamily: macAddress.isNotEmpty ? 'monospace' : null,
+                    fontWeight: macAddress.isNotEmpty ? FontWeight.w600 : FontWeight.normal,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              TextButton(
+                onPressed: () => _editMacAddress(macAddress),
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: Text(macAddress.isEmpty ? 'Set MAC' : 'Edit'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            'Broadcast / Subnet IP:',
+            style: TextStyle(
+              color: colorScheme.onSurfaceVariant,
+              fontSize: 12,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Expanded(
+                child: Text(
+                  activeBroadcastDisplay,
+                  style: TextStyle(
+                    color: colorScheme.onSurface,
+                    fontSize: 14,
+                    fontFamily: 'monospace',
+                    fontWeight: FontWeight.w500,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              TextButton(
+                onPressed: () => _editWolBroadcastIp(customBroadcastIp),
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: Text(customBroadcastIp.isEmpty ? 'Customize' : 'Edit'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              icon: const Icon(Icons.bolt, size: 18),
+              label: const Text('SEND WAKE PACKET (WOL)'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: colorScheme.primary,
+                foregroundColor: colorScheme.onPrimary,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              onPressed: () => _sendWolPacket(macAddress),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildPreferencesCard() {
     final colorScheme = Theme.of(context).colorScheme;
     return Container(
@@ -508,6 +782,122 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 ),
               ),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPushNotificationsCard() {
+    final colorScheme = Theme.of(context).colorScheme;
+    final notifService = ref.watch(notificationServiceProvider);
+    final hasToken = notifService.fcmToken != null || notifService.isTokenRegistered;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerLowest,
+        border: Border.all(color: colorScheme.outline),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                hasToken ? Icons.notifications_active : Icons.notifications_off,
+                color: hasToken ? const Color(0xFF4CAF50) : colorScheme.onSurfaceVariant,
+                size: 20,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'FCM Push Notifications',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 15,
+                ),
+              ),
+              const Spacer(),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: hasToken
+                      ? const Color(0xFF4CAF50).withValues(alpha: 0.2)
+                      : colorScheme.surfaceContainerHigh,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  hasToken ? 'Active' : 'Standby',
+                  style: TextStyle(
+                    color: hasToken ? const Color(0xFF4CAF50) : colorScheme.onSurfaceVariant,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            'Receive alerts on your phone when Relay-X finishes responding, asks questions, or encounters errors.',
+            style: TextStyle(color: colorScheme.onSurfaceVariant, fontSize: 13),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  icon: const Icon(Icons.send, size: 16),
+                  label: const Text('Send Test Push'),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  onPressed: () async {
+                    try {
+                      final client = ref.read(apiClientProvider);
+                      final res = await client.sendTestNotification();
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              'Test notification sent! (Active devices: ${res['activeTokens'] ?? 1})',
+                            ),
+                            backgroundColor: const Color(0xFF2E7D32),
+                          ),
+                        );
+                      }
+                    } catch (e) {
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text('Failed to send test notification: $e'),
+                            backgroundColor: Colors.red,
+                          ),
+                        );
+                      }
+                    }
+                  },
+                ),
+              ),
+              const SizedBox(width: 8),
+              IconButton.outlined(
+                tooltip: 'Re-sync FCM Token with Server',
+                icon: const Icon(Icons.sync, size: 18),
+                onPressed: () async {
+                  final ok = await notifService.syncToken(force: true);
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(ok ? 'FCM Token registered with server!' : 'Token sync failed'),
+                        backgroundColor: ok ? const Color(0xFF2E7D32) : Colors.red,
+                      ),
+                    );
+                  }
+                },
+              ),
+            ],
           ),
         ],
       ),
@@ -671,7 +1061,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     return Column(
       children: [
         Text(
-          'ANTIGRAVITY',
+          'RELAY-X',
           style: TextStyle(
             color: colorScheme.onSurface,
             fontSize: 20,

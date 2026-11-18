@@ -3,6 +3,7 @@ class HardwareTelemetry {
   final GpuTelemetry gpu;
   final RamTelemetry ram;
   final FanTelemetry fans;
+  final String? macAddress;
   final int timestamp;
 
   HardwareTelemetry({
@@ -10,6 +11,7 @@ class HardwareTelemetry {
     required this.gpu,
     required this.ram,
     required this.fans,
+    this.macAddress,
     required this.timestamp,
   });
 
@@ -19,6 +21,7 @@ class HardwareTelemetry {
       gpu: GpuTelemetry.fromJson(json['gpu'] ?? {}),
       ram: RamTelemetry.fromJson(json['ram'] ?? {}),
       fans: FanTelemetry.fromJson(json['fans'] ?? {}),
+      macAddress: json['macAddress'] as String?,
       timestamp: json['timestamp'] ?? DateTime.now().millisecondsSinceEpoch,
     );
   }

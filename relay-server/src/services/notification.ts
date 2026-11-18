@@ -109,7 +109,19 @@ export class TokenStore {
   private tokens: DeviceToken[] = [];
 
   constructor(workspaceDir: string) {
-    this.filePath = path.join(workspaceDir, '.antigravity-tokens.json');
+    const primaryPath = path.join(workspaceDir, '.relay-x-tokens.json');
+    const legacyPath = path.join(workspaceDir, '.antigravity-tokens.json');
+    // Maintain backward compatibility: if primary doesn't exist but legacy does, read legacy and copy over
+    if (!fs.existsSync(primaryPath) && fs.existsSync(legacyPath)) {
+      this.filePath = primaryPath;
+      try {
+        fs.copyFileSync(legacyPath, primaryPath);
+      } catch (_) {
+        this.filePath = legacyPath;
+      }
+    } else {
+      this.filePath = primaryPath;
+    }
     this.loadTokens();
   }
 
@@ -190,6 +202,14 @@ export class NotificationService extends EventEmitter implements Service {
     this.tokenStore.registerToken(deviceId, fcmToken, platform);
   }
 
+  public getActiveTokenCount(): number {
+    return this.tokenStore ? this.tokenStore.getActiveTokens().length : 0;
+  }
+
+  public isProviderReady(): boolean {
+    return this.provider ? (this.provider as any).initialized : false;
+  }
+
   public onTranscriptEvent(conversationId: string, event: any) {
     const payload = this.shouldNotify(conversationId, event);
     if (payload) {
@@ -225,22 +245,36 @@ export class NotificationService extends EventEmitter implements Service {
     const category = event.category;
     const status = event.status;
     
-    // 1. Notify when Antigravity completes a turn and replies with a final message
-    if (category === 'agent_response' && status === 'done' && event.content && event.content.length > 10) {
+    // 1. Notify when agent asks a question or requests user feedback
+    const isAskQuestion = event.toolCalls?.some((t: any) => t.name?.includes('ask_question')) || 
+                          (category === 'tool_invocation' && event.summary?.toLowerCase().includes('ask_question'));
+    if (isAskQuestion) {
       return {
         category: 'response_ready',
-        title: 'Antigravity responded',
-        body: event.content.substring(0, 100),
+        title: 'Relay-X: Agent needs input',
+        body: 'Agent asked a question and is waiting for your reply.',
+        conversationId,
+        priority: 'high',
+        deduplicationKey: `question_${conversationId}_${event.stepIndex ?? Date.now()}`,
+      };
+    }
+
+    // 2. Notify when Antigravity completes a turn and replies with a final message
+    if (category === 'agent_response' && status === 'done' && event.content && event.content.length > 5) {
+      return {
+        category: 'response_ready',
+        title: 'Relay-X: Agent responded',
+        body: event.content.substring(0, 120),
         conversationId,
         deduplicationKey: `response_${conversationId}_${event.stepIndex ?? Date.now()}`,
       };
     }
 
-    // 2. Notify ONLY on critical system/model errors, ignore normal tool execution errors
+    // 3. Notify on critical errors
     if (category === 'error') {
       return {
         category: 'error',
-        title: 'System Error in conversation',
+        title: 'Error in conversation',
         body: (event.content || event.summary || 'An error occurred').substring(0, 100),
         conversationId,
         priority: 'high',

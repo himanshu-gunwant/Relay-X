@@ -2,9 +2,12 @@ const http = require('http');
 const WebSocket = require('ws');
 const fs = require('fs');
 
+const path = require('path');
+
 console.log("Locating Antigravity DevTools port...");
 
-const portFile = 'C:\\Users\\Himanshu\\AppData\\Roaming\\Antigravity\\DevToolsActivePort';
+const appData = process.env.APPDATA || path.join(require('os').homedir(), 'AppData', 'Roaming');
+const portFile = path.join(appData, 'Antigravity', 'DevToolsActivePort');
 const port = fs.readFileSync(portFile, 'utf8').split('\n')[0].trim();
 console.log("Active DevTools Port: " + port);
 

@@ -3,6 +3,8 @@ import { AgentapiService } from '../services/agentapi.js';
 import { OverviewService } from '../services/overview.js';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
+import os from 'os';
 
 export async function conversationsRoutes(
   fastify: FastifyInstance,
@@ -125,18 +127,110 @@ export async function conversationsRoutes(
   });
 
   fastify.post('/', async (request, reply) => {
-    const { prompt, model, modelChange, selectedModel } = request.body as { 
+    const { prompt, model, modelChange, selectedModel, workspace } = request.body as { 
       prompt: string; 
       model?: 'flash_lite' | 'flash' | 'pro'; 
       modelChange?: { from: string; to: string };
       selectedModel?: string;
+      workspace?: string;
     };
     if (!prompt) {
       request.log.error({ body: request.body, headers: request.headers }, 'Missing prompt in request');
       return reply.status(400).send({ error: 'prompt is required', receivedBody: request.body });
     }
 
-    const result = await agentapi.newConversation(prompt, model, modelChange, selectedModel);
+    let targetProjectId: string | undefined;
+
+    if (workspace) {
+      try {
+        const convs = await transcripts.listConversations();
+        const existing = convs.find((c: any) => {
+          const cPath = c.workspace ? c.workspace.replace(/\\/g, '/').toLowerCase() : '';
+          const wPath = workspace.replace(/\\/g, '/').toLowerCase();
+          return cPath === wPath;
+        });
+
+        if (existing) {
+          console.log(`[Relay] Found existing conversation ${existing.id} for workspace ${workspace}. Fetching projectId...`);
+          const metaResult = await agentapi.getConversationMetadata(existing.id);
+          if (metaResult.success && metaResult.data) {
+            targetProjectId = metaResult.data.projectId;
+            console.log(`[Relay] Resolved workspace ${workspace} to existing projectId: ${targetProjectId}`);
+          }
+        }
+
+        if (!targetProjectId) {
+          // Fallback to reading agyhub_summaries_proto.pb and app_storage.json
+          const hubFile = path.join(os.homedir(), '.gemini', 'antigravity', 'agyhub_summaries_proto.pb');
+          const appStoreFile = path.join(os.homedir(), 'AppData', 'Roaming', 'Antigravity', 'app_storage.json');
+          
+          if (fs.existsSync(hubFile)) {
+            const hubData = fs.readFileSync(hubFile, 'utf8');
+            let activeIds = new Set<string>();
+            
+            if (fs.existsSync(appStoreFile)) {
+              try {
+                const appStore = JSON.parse(fs.readFileSync(appStoreFile, 'utf8'));
+                // Extract all valid UUIDs from the keys or values in app_storage.json
+                const uuidRegex = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
+                for (const key of Object.keys(appStore)) {
+                  const kmatch = key.match(uuidRegex);
+                  if (kmatch) activeIds.add(kmatch[1]);
+                  const vmatch = String(appStore[key]).match(uuidRegex);
+                  if (vmatch) activeIds.add(vmatch[1]);
+                }
+              } catch(e) {}
+            }
+
+            const wPath = workspace.replace(/\\/g, '/').replace(/ /g, '%20');
+            const escapedPath = wPath.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+            const regex = new RegExp(`file:\\/\\/\\/${escapedPath}.*?\\$([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})`, 'ig');
+            
+            let match;
+            const candidates = [];
+            while ((match = regex.exec(hubData)) !== null) {
+              candidates.push(match[1]);
+            }
+            
+            if (candidates.length > 0) {
+              // Prefer candidates that are still marked active in the Desktop App's state.
+              // Search backwards to pick the MOST RECENT active project ID.
+              const activeCandidate = [...candidates].reverse().find(id => activeIds.has(id));
+              targetProjectId = activeCandidate || candidates[candidates.length - 1]; // fallback to most recent if none are "active"
+              console.log(`[Relay] Resolved workspace ${workspace} from agyhub to existing projectId: ${targetProjectId}`);
+            }
+          }
+        }
+
+        if (!targetProjectId) {
+          const newProjectId = crypto.randomUUID();
+          const name = path.basename(workspace) || 'Remote Project';
+          console.log(`[Relay] No existing project found for ${workspace}. Registering new projectId: ${newProjectId}`);
+          const success = await agentapi.createProject(newProjectId, name, workspace);
+          if (success) {
+            targetProjectId = newProjectId;
+          }
+        }
+      } catch (err: any) {
+        console.error('[Relay] Error resolving projectId for workspace:', err.message);
+      }
+    }
+
+    let result = await agentapi.newConversation(prompt, model, modelChange, selectedModel, targetProjectId);
+    
+    // If StartCascade failed, the resolved targetProjectId might be stale or deleted from the daemon.
+    if (!result.success && result.error?.message === 'Failed to StartCascade' && workspace) {
+      console.log(`[Relay] StartCascade failed for resolved projectId ${targetProjectId}. It may be stale. Registering a new one...`);
+      const newProjectId = crypto.randomUUID();
+      const name = path.basename(workspace) || 'Remote Project';
+      const success = await agentapi.createProject(newProjectId, name, workspace);
+      if (success) {
+        targetProjectId = newProjectId;
+        console.log(`[Relay] Retrying newConversation with fresh projectId: ${targetProjectId}`);
+        result = await agentapi.newConversation(prompt, model, modelChange, selectedModel, targetProjectId);
+      }
+    }
+
     if (!result.success || !result.data) {
       return reply.status(500).send({ error: result.error?.message || 'Failed to create conversation' });
     }
@@ -183,6 +277,16 @@ export async function conversationsRoutes(
     return reply.status(200).send({});
   });
 
+  fastify.post('/:id/cancel', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    console.log(`[Relay] Cancel requested for conversation: ${id}`);
+    const result = await agentapi.cancelConversation(id);
+    if (!result.success) {
+      return reply.status(500).send({ error: result.error?.message || 'Failed to cancel conversation' });
+    }
+    return reply.status(200).send({ success: true, message: 'Turn cancelled successfully' });
+  });
+
   fastify.post('/projects/new', async (request, reply) => {
     console.log('[Relay] HIT POST /projects/new endpoint!');
     const { targetDirectory } = request.body as { targetDirectory: string };
@@ -195,7 +299,13 @@ export async function conversationsRoutes(
       const newProjectId = crypto.randomUUID();
       const name = path.basename(targetDirectory) || 'Remote Project';
       
-      const success = await agentapi.createProject(newProjectId, name, targetDirectory);
+      let success = await agentapi.createProject(newProjectId, name, targetDirectory);
+      
+      if (!success) {
+        const uniqueName = `${name}-${newProjectId.split('-')[0]}`;
+        console.log(`[Relay] Retrying CreateProject with unique name: ${uniqueName}`);
+        success = await agentapi.createProject(newProjectId, uniqueName, targetDirectory);
+      }
       
       if (success) {
         return reply.send({ success: true, message: 'Project initialized remotely!', projectId: newProjectId });

@@ -1,19 +1,41 @@
-# Antigravity Companion - Relay Server
+# Relay-X - Relay Server & CLI
 
-The backend service for the Antigravity Companion system, built with Node.js.
+The backend service and CLI tool for the Relay-X cross-device agent bridge, built with Node.js and TypeScript.
 
 ## Purpose
-The relay server acts as the central hub for routing requests, managing active workspaces, and orchestrating API interactions between the mobile app and the backend infrastructure.
+The Relay-X server acts as the central hub for discovering local agent runtimes, managing active workspaces, routing WebSocket events, streaming terminal sessions, and dispatching push notifications to the mobile client.
+
+## CLI Usage
+Relay-X can be run as a globally linked CLI command:
+
+```bash
+# Display help and available commands
+relay-x --help
+
+# Show current version
+relay-x --version
+
+# Run the guided security & API key setup
+relay-x setup
+
+# Check daemon health and agent connectivity
+relay-x status
+
+# Start the server daemon
+relay-x start
+```
 
 ## Architecture
-The server is built on Node.js using WebSockets for real-time communication. It securely authenticates requests and handles data transmission between the mobile client and the workspace environment.
+The server is built on Node.js using Fastify and WebSockets for high-performance, real-time communication. It securely authenticates mobile client requests and bridges local developer workspaces.
 
 ## Environment Variables
-Create a `.env` file in the root of the `relay-server` directory using `.env.example` as a template.
+Create a `.env` file in the root of the `relay-server` directory using `.env.example` as a template (or run `relay-x setup` to generate one automatically).
 
 Required variables:
 - `API_KEY_HASH`: The bcrypt hash of your API key used for authenticating the mobile client.
 - `WORKSPACE_DIR`: The absolute path to your active workspace directory.
+- `PORT`: (Optional) Server port, defaults to `3579`.
+- `ANTIGRAVITY_EXE_PATH` / `RELAY_X_AGENT_EXE_PATH`: (Optional) Path to the host desktop agent executable.
 
 ## Setup Instructions
 1. Navigate to the `relay-server` directory.
@@ -21,27 +43,31 @@ Required variables:
    ```bash
    npm install
    ```
-3. **Credentials Setup**: Create a folder named `credentials/profiles` within the `relay-server` directory. Place your account access tokens (JSON files) inside this folder.
+3. Run the setup command:
+   ```bash
+   npm run setup
+   # or: relay-x setup
+   ```
+4. **Credentials Setup**: Create a folder named `credentials/profiles` within the `relay-server` directory if needed for multi-account management:
    ```bash
    mkdir -p credentials/profiles
    ```
-4. **Firebase Configuration**: Ensure you have a valid Firebase service account or client configuration if your setup requires connecting to Firebase services. Place the required Firebase JSON configuration in your environment or designated configuration path as expected by your Firebase integration.
+5. **Firebase Configuration**: Ensure you have a valid Firebase service account JSON placed in `credentials/firebase-service-account.json` if push alerts are required.
 
 ## Running Locally
 To start the server for local development:
 ```bash
-npm start
+npm run dev
+# or: relay-x
 ```
-*Note: Depending on your `package.json` scripts, you may need to use `node index.js` or equivalent.*
 
 ## Production Deployment
-For production, it is recommended to run the server using a process manager like PM2:
+For production, run the server using PM2 or the included Windows Scheduled Task scripts:
 ```bash
 npm install -g pm2
-pm2 start index.js --name "antigravity-relay"
+pm2 start dist/index.js --name "relay-x"
 ```
-Ensure that your server is secured behind a reverse proxy (like Nginx) with SSL termination.
 
 ## Troubleshooting
-- **Cannot connect from mobile**: Check if the server is binding to `localhost` (127.0.0.1) instead of `0.0.0.0`. You may need to bind to all interfaces to allow local network traffic.
-- **Authentication Failures**: Verify that the `API_KEY_HASH` matches the API key configured in your mobile app settings.
+- **Cannot connect from mobile**: Check that the server is binding to `0.0.0.0` and that Windows Firewall allows inbound connections on port `3579`.
+- **Authentication Failures**: Verify that the `API_KEY_HASH` in `.env` matches the plain API key entered in your mobile app settings.

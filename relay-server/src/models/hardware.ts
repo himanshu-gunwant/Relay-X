@@ -3,6 +3,7 @@ export interface HardwareTelemetry {
   gpu: GpuTelemetry;
   ram: RamTelemetry;
   fans: FanTelemetry;
+  macAddress?: string | null;
   timestamp: number;
 }
 

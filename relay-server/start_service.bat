@@ -1,3 +1,3 @@
 @echo off
-cd /d "d:\Antigravity Companion\relay-server"
+cd /d "%~dp0"
 "C:\Program Files\nodejs\node.exe" dist\index.js >> service.log 2>&1

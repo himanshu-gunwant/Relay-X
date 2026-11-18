@@ -137,9 +137,7 @@ export async function wsRoutes(
       if (options.gitService) {
         options.gitService.removeListener('git:status-change', onGitStatusChange);
       }
-      if (options.buildDetector) {
-        options.buildDetector.removeListener('build:detected', onBuildDetected);
-      }
+
       if (options.hardwareMonitor) {
         options.hardwareMonitor.removeListener('hardware:telemetry', onHardwareTelemetry);
       }
@@ -167,9 +165,7 @@ export async function wsRoutes(
       if (options.gitService) {
         options.gitService.on('git:status-change', onGitStatusChange);
       }
-      if (options.buildDetector) {
-        options.buildDetector.on('build:detected', onBuildDetected);
-      }
+
       if (options.hardwareMonitor) {
         options.hardwareMonitor.on('hardware:telemetry', onHardwareTelemetry);
       }

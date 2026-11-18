@@ -1,4 +1,29 @@
 {
+  "name": "relay-x",
+  "version": "1.2.1",
+  "description": "Relay-X is a cross-device bridge for connecting, controlling, and extending AI coding agents remotely.",
+  "author": "Himanshu Gunwant <hello@himanshugunwant.com> (https://github.com/himanshu-gunwant)",
+  "license": "MIT",
+  "bin": {
+    "relay-x": "./relay-server/dist/index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/himanshu-gunwant/Relay-X.git"
+  },
+  "bugs": {
+    "url": "https://github.com/himanshu-gunwant/Relay-X/issues"
+  },
+  "homepage": "https://github.com/himanshu-gunwant/Relay-X#readme",
+  "keywords": [
+    "relay-x",
+    "remote-agent",
+    "developer-tools",
+    "relay-server",
+    "flutter",
+    "cross-device",
+    "ai-agents"
+  ],
   "dependencies": {
     "intl": "^1.2.5",
     "ws": "^8.21.0"

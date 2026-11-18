@@ -4,7 +4,11 @@ $ErrorActionPreference = "Stop"
 $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 
 # Define task parameters
-$taskName = "AntigravityAutoLock"
+$taskName = "RelayXAutoLock"
+$legacyTask = "AntigravityAutoLock"
+if (Get-ScheduledTask -TaskName $legacyTask -ErrorAction SilentlyContinue) {
+    Unregister-ScheduledTask -TaskName $legacyTask -Confirm:$false -ErrorAction SilentlyContinue
+}
 $action = New-ScheduledTaskAction -Execute "rundll32.exe" -Argument "user32.dll,LockWorkStation"
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $currentUser
 

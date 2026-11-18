@@ -174,6 +174,14 @@ class _AppSidebarState extends ConsumerState<AppSidebar> {
                     },
                   ),
                   _buildNavItem(
+                    icon: Icons.hub_outlined,
+                    title: 'MCP & Customizations',
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      context.push('/mcp');
+                    },
+                  ),
+                  _buildNavItem(
                     icon: Icons.settings,
                     title: 'Settings',
                     onTap: () {
@@ -199,18 +207,23 @@ class _AppSidebarState extends ConsumerState<AppSidebar> {
           Container(
             width: 40,
             height: 40,
+            padding: const EdgeInsets.all(6.0),
             decoration: BoxDecoration(
-              color: colorScheme.primary.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(4),
-              border: Border.all(color: colorScheme.primary.withValues(alpha: 0.2)),
+              color: colorScheme.surfaceBright,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: colorScheme.outlineVariant),
             ),
             alignment: Alignment.center,
-            child: Text(
-              'AG',
-              style: TextStyle(
-                color: colorScheme.primary,
-                fontWeight: FontWeight.bold,
-                fontSize: 18,
+            child: Image.asset(
+              'assets/relay_x_logo.png',
+              fit: BoxFit.contain,
+              errorBuilder: (context, error, stackTrace) => Text(
+                'RX',
+                style: TextStyle(
+                  color: colorScheme.primary,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
               ),
             ),
           ),
@@ -219,7 +232,7 @@ class _AppSidebarState extends ConsumerState<AppSidebar> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Antigravity',
+                'Relay-X',
                 style: TextStyle(
                   color: colorScheme.onSurface,
                   fontWeight: FontWeight.bold,
@@ -230,7 +243,7 @@ class _AppSidebarState extends ConsumerState<AppSidebar> {
               Row(
                 children: [
                   Text(
-                    'COMPANION',
+                    'REMOTE BRIDGE',
                     style: TextStyle(
                       color: colorScheme.onSurfaceVariant,
                       fontSize: 9,
@@ -239,7 +252,7 @@ class _AppSidebarState extends ConsumerState<AppSidebar> {
                   ),
                   const SizedBox(width: 8),
                   Text(
-                    'v0.1.0',
+                    'v1.2.1',
                     style: TextStyle(
                       color: colorScheme.outlineVariant,
                       fontSize: 9,
@@ -332,10 +345,11 @@ class _AppSidebarState extends ConsumerState<AppSidebar> {
             color: Colors.transparent,
             child: InkWell(
               onTap: () async {
+                final router = GoRouter.of(context);
                 Navigator.of(context).pop();
-                final result = await context.push<bool>('/pc_file_manager');
-                if (result == true && widget.onNewConversation != null) {
-                  widget.onNewConversation!();
+                final result = await router.push<String>('/pc_file_manager');
+                if (result != null && result.isNotEmpty) {
+                  router.push('/chat?workspace=$result');
                 }
               },
               borderRadius: BorderRadius.circular(8),

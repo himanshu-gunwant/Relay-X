@@ -5,6 +5,7 @@ import { Service } from './types';
 import { AntigravityContext } from '../bootstrap/types';
 import * as crypto from 'crypto';
 import * as https from 'https';
+import path from 'path';
 
 const execFileAsync = promisify(execFile);
 
@@ -63,7 +64,7 @@ class AgentapiV2Adapter implements AgentapiAdapter {
   }
 
   buildSendMessageArgs(recipientId: string, content: string): string[] {
-    const wrappedContent = `[MOBILE_MESSAGE_START]\n${content}\n[MOBILE_MESSAGE_END]\n\n(Agent Instruction: The text between the tags above is a direct message from the human user using the mobile companion app. Please respond to them directly as their AI assistant.)`;
+    const wrappedContent = `[MOBILE_MESSAGE_START]\n${content}\n[MOBILE_MESSAGE_END]\n\n(Agent Instruction: The text between the tags above is a direct message from the human user using the Relay-X remote app. Please respond to them directly as their AI assistant.)`;
     return ['send-message', recipientId, wrappedContent];
   }
 
@@ -91,16 +92,34 @@ export class AgentapiService implements Service {
   private execLock = new Mutex();
   private adapter: AgentapiAdapter = new AgentapiV2Adapter();
   
+  public recentlyCreatedProjects = new Map<string, { id: string, name: string, workspace: string }>();
   private readonly MODEL_MAP: Record<string, string> = {
-    'gemini_3.5_flash_medium': 'MODEL_PLACEHOLDER_M20',
-    'gemini_3.5_flash_high_fast': 'MODEL_PLACEHOLDER_M132',
-    'gemini_3.5_flash_low': 'MODEL_PLACEHOLDER_M187',
-    'gemini_3.1_pro_low': 'MODEL_PLACEHOLDER_M36',
-    'gemini_3.1_pro_high': 'MODEL_PLACEHOLDER_M16',
-    'claude_sonnet_4.6_thinking': 'MODEL_PLACEHOLDER_M35',
-    'claude_opus_4.6_thinking': 'MODEL_PLACEHOLDER_M26',
-    'gpt_oss_120b_medium': 'MODEL_OPENAI_GPT_OSS_120B_MEDIUM'
+    // Current Antigravity models (Late 2026 / 1.3.1)
+    'gemini_3.8_flash_high': 'gemini-3.8-flash-high',
+    'gemini_3.8_flash_medium': 'gemini-3.8-flash-medium',
+    'gemini_3.8_flash_low': 'gemini-3.8-flash-low',
+    'claude_sonnet_4.6_thinking': 'claude-sonnet-4-6',
+    'claude_opus_4.6_thinking': 'claude-opus-4-6-thinking',
+    'gpt_oss_120b_medium': 'gpt-oss-120b-medium',
+    // Direct slug pass-throughs
+    'gemini-3.8-flash-high': 'gemini-3.8-flash-high',
+    'gemini-3.8-flash-medium': 'gemini-3.8-flash-medium',
+    'gemini-3.8-flash-low': 'gemini-3.8-flash-low',
+    'claude-sonnet-4-6': 'claude-sonnet-4-6',
+    'claude-opus-4-6-thinking': 'claude-opus-4-6-thinking',
+    'gpt-oss-120b-medium': 'gpt-oss-120b-medium',
+    // Backwards compatibility with previous mobile app versions
+    'gemini_3.5_flash_high_fast': 'gemini-3.8-flash-high',
+    'gemini_3.5_flash_medium': 'gemini-3.8-flash-medium',
+    'gemini_3.5_flash_low': 'gemini-3.8-flash-low',
+    'gemini_3.1_pro_low': 'gemini-3.8-flash-medium',
+    'gemini_3.1_pro_high': 'gemini-3.8-flash-high',
   };
+
+  private resolveModel(modelKey?: string): string {
+    if (!modelKey) return 'gemini-3.8-flash-high';
+    return this.MODEL_MAP[modelKey] || modelKey;
+  }
 
   async start(ctx: AntigravityContext): Promise<void> {
     this.ctx = ctx;
@@ -161,23 +180,41 @@ export class AgentapiService implements Service {
           'content-type': 'application/grpc-web+json',
           'x-grpc-web': '1',
           'content-length': grpcWebBody.length,
-          'User-Agent': 'Antigravity-Companion-App'
+          'User-Agent': 'Relay-X-App'
         }
       };
 
+      console.log(`[Agentapi] CreateProject payload:`, payloadString);
+
       return new Promise((res) => {
         const req = https.request(options, (response: any) => {
-          response.on('data', () => {});
+          let chunks: any[] = [];
+          response.on('data', (chunk: any) => chunks.push(chunk));
           response.on('end', () => {
-            if (response.statusCode >= 200 && response.statusCode < 300) {
+            const body = Buffer.concat(chunks).toString('utf8');
+            console.log(`[Agentapi] CreateProject response: Port=${port}, Status=${response.statusCode}, Headers=${JSON.stringify(response.headers)}, Body=${body}`);
+            const grpcStatus = response.headers['grpc-status'] || (response.trailers && response.trailers['grpc-status']);
+            if (response.statusCode >= 200 && response.statusCode < 300 && (!grpcStatus || grpcStatus === '0')) {
               res(true);
             } else {
-              res(trySend(portIdx + 1));
+              console.error(`[Agentapi] CreateProject failed with grpc-status: ${grpcStatus}`);
+              if (grpcStatus && grpcStatus !== '0') {
+                res(false); // Stop retrying if we hit the actual gRPC server but got an application error
+              } else {
+                res(trySend(portIdx + 1));
+              }
             }
           });
         });
-        req.on('error', () => res(trySend(portIdx + 1)));
-        req.on('timeout', () => { req.destroy(); res(trySend(portIdx + 1)); });
+        req.on('error', (err: any) => {
+          console.error(`[Agentapi] CreateProject req error on port ${port}:`, err.message);
+          res(trySend(portIdx + 1));
+        });
+        req.on('timeout', () => {
+          console.error(`[Agentapi] CreateProject timeout on port ${port}`);
+          req.destroy();
+          res(trySend(portIdx + 1));
+        });
         req.write(grpcWebBody);
         req.end();
       });
@@ -185,6 +222,11 @@ export class AgentapiService implements Service {
 
     const success = await trySend(0);
     if (success) {
+      this.recentlyCreatedProjects.set(targetDirectory, {
+        id: projectId,
+        name: name,
+        workspace: targetDirectory
+      });
       this.updateActiveProject(projectId);
     }
     return success;
@@ -209,24 +251,24 @@ export class AgentapiService implements Service {
     prompt: string,
     model?: 'flash_lite' | 'flash' | 'pro',
     modelChange?: { from: string; to: string },
-    selectedModel?: string
+    selectedModel?: string,
+    projectId?: string
   ): Promise<AgentapiResult<NewConversationResponse>> {
     const conversationId = crypto.randomUUID();
-    let gRpcModel = 'MODEL_PLACEHOLDER_M16';
-    
-    if (selectedModel && this.MODEL_MAP[selectedModel]) {
-      gRpcModel = this.MODEL_MAP[selectedModel];
-    }
+    const gRpcModel = this.resolveModel(selectedModel);
 
     await this.writeModelState(gRpcModel);
+
+    const targetProjectId = projectId || this.ctx.projectId;
+    console.log(`[Agentapi] newConversation using projectId: ${targetProjectId}, model: ${gRpcModel}`);
 
     // Native StartCascade
     const startPayloadObj = {
       source: 'CORTEX_TRAJECTORY_SOURCE_CASCADE_CLIENT',
       cascadeId: conversationId,
-      requestedModel: 'MODEL_PLACEHOLDER_M16', // Desktop app always initializes cascade with M16
+      requestedModel: gRpcModel,
       projectEnvConfig: {
-        projectId: this.ctx.projectId,
+        projectId: targetProjectId,
         defaultProjectEnvironment: {}
       }
     };
@@ -256,23 +298,41 @@ export class AgentapiService implements Service {
           'content-type': 'application/grpc-web+json',
           'x-grpc-web': '1',
           'content-length': grpcWebBody.length,
-          'User-Agent': 'Antigravity-Companion-App'
+          'User-Agent': 'Relay-X-App'
         }
       };
 
+      console.log(`[Agentapi] StartCascade payload:`, payloadString);
+
       return new Promise((res) => {
         const req = https.request(options, (response: any) => {
-          response.on('data', () => {});
+          let chunks: any[] = [];
+          response.on('data', (chunk: any) => chunks.push(chunk));
           response.on('end', () => {
-            if (response.statusCode >= 200 && response.statusCode < 300) {
+            const body = Buffer.concat(chunks).toString('utf8');
+            console.log(`[Agentapi] StartCascade response: Port=${port}, Status=${response.statusCode}, Headers=${JSON.stringify(response.headers)}, Body=${body}`);
+            const grpcStatus = response.headers['grpc-status'] || (response.trailers && response.trailers['grpc-status']);
+            if (response.statusCode >= 200 && response.statusCode < 300 && (!grpcStatus || grpcStatus === '0')) {
               res(true);
             } else {
-              res(trySend(portIdx + 1));
+              console.error(`[Agentapi] StartCascade failed with grpc-status: ${grpcStatus}`);
+              if (grpcStatus && grpcStatus !== '0') {
+                res(false);
+              } else {
+                res(trySend(portIdx + 1));
+              }
             }
           });
         });
-        req.on('error', () => res(trySend(portIdx + 1)));
-        req.on('timeout', () => { req.destroy(); res(trySend(portIdx + 1)); });
+        req.on('error', (err: any) => {
+          console.error(`[Agentapi] StartCascade req error on port ${port}:`, err.message);
+          res(trySend(portIdx + 1));
+        });
+        req.on('timeout', () => {
+          console.error(`[Agentapi] StartCascade timeout on port ${port}`);
+          req.destroy();
+          res(trySend(portIdx + 1));
+        });
         req.write(grpcWebBody);
         req.end();
       });
@@ -304,12 +364,7 @@ export class AgentapiService implements Service {
     model?: string
   ): Promise<AgentapiResult<SendMessageResponse>> {
     const finalPrompt = content;
-    
-    // Map model key to gRPC model placeholder
-    let gRpcModel = 'MODEL_PLACEHOLDER_M16'; // default: Pro High
-    if (model && this.MODEL_MAP[model]) {
-      gRpcModel = this.MODEL_MAP[model];
-    }
+    const gRpcModel = this.resolveModel(model);
     
     console.log(`[Agentapi] sendMessage called with model: ${model}, resolved to gRpcModel: ${gRpcModel}`);
 
@@ -377,7 +432,7 @@ export class AgentapiService implements Service {
             'content-type': 'application/grpc-web+json',
             'x-grpc-web': '1',
             'content-length': grpcWebBody.length,
-            'User-Agent': 'Antigravity-Companion-App'
+            'User-Agent': 'Relay-X-App'
           }
         };
 
@@ -386,11 +441,16 @@ export class AgentapiService implements Service {
             let responseData = '';
             response.on('data', (chunk: any) => { responseData += chunk; });
             response.on('end', () => {
-              if (response.statusCode >= 200 && response.statusCode < 300) {
+              const grpcStatus = response.headers['grpc-status'] || (response.trailers && response.trailers['grpc-status']);
+              if (response.statusCode >= 200 && response.statusCode < 300 && (!grpcStatus || grpcStatus === '0')) {
                 res({ success: true, data: {} });
               } else {
-                // If it's a 404 or 500, try the next port (since some ports don't run the gRPC server)
-                res(trySend(portIdx + 1, attempt));
+                console.error(`[Agentapi] SendUserCascadeMessage failed with grpc-status: ${grpcStatus}`);
+                if (grpcStatus && grpcStatus !== '0') {
+                  res({ success: false, error: { code: 'UNKNOWN', message: `Server returned grpc-status: ${grpcStatus}`, retryable: false } });
+                } else {
+                  res(trySend(portIdx + 1, attempt));
+                }
               }
             });
           });
@@ -441,7 +501,7 @@ export class AgentapiService implements Service {
           'content-type': 'application/grpc-web+json',
           'x-grpc-web': '1',
           'content-length': grpcWebBody.length,
-          'User-Agent': 'Antigravity-Companion-App'
+          'User-Agent': 'Relay-X-App'
         }
       };
 
@@ -503,7 +563,7 @@ export class AgentapiService implements Service {
           'content-type': 'application/grpc-web+json',
           'x-grpc-web': '1',
           'content-length': grpcWebBody.length,
-          'User-Agent': 'Antigravity-Companion-App'
+          'User-Agent': 'Relay-X-App'
         }
       };
 
@@ -536,6 +596,82 @@ export class AgentapiService implements Service {
     };
 
     return trySend(0);
+  }
+
+  async cancelConversation(conversationId: string): Promise<AgentapiResult<any>> {
+    if (!this.ctx || !this.ctx.lsPorts || this.ctx.lsPorts.length === 0) {
+      return { success: false, error: { code: 'CONNECTION_FAILED', message: 'No Language Server ports available', retryable: false } };
+    }
+
+    const payloadObj = { cascadeId: conversationId };
+    const payloadString = JSON.stringify(payloadObj);
+    const payloadBuffer = Buffer.from(payloadString, 'utf8');
+
+    const frameHeader = Buffer.alloc(5);
+    frameHeader.writeUInt8(0, 0);
+    frameHeader.writeUInt32BE(payloadBuffer.length, 1);
+    const grpcWebBody = Buffer.concat([frameHeader, payloadBuffer]);
+
+    const endpoints = [
+      '/exa.language_server_pb.LanguageServerService/CancelCascadeInvocation',
+      '/exa.language_server_pb.LanguageServerService/ForceStopCascadeTree',
+    ];
+
+    const trySend = (endpointIdx: number, portIdx: number): Promise<AgentapiResult<any>> => {
+      if (endpointIdx >= endpoints.length) {
+        return Promise.resolve({ success: false, error: { code: 'UNKNOWN', message: 'Failed to cancel cascade across all endpoints and ports', retryable: false } });
+      }
+      if (portIdx >= this.ctx.lsPorts.length) {
+        return trySend(endpointIdx + 1, 0);
+      }
+
+      const port = this.ctx.lsPorts[portIdx];
+      const endpoint = endpoints[endpointIdx];
+
+      const options = {
+        hostname: '127.0.0.1',
+        port: port,
+        path: endpoint,
+        method: 'POST',
+        rejectUnauthorized: false,
+        timeout: 5000,
+        headers: {
+          'x-codeium-csrf-token': this.ctx.csrfToken,
+          'content-type': 'application/grpc-web+json',
+          'x-grpc-web': '1',
+          'content-length': grpcWebBody.length,
+          'User-Agent': 'Relay-X-App'
+        }
+      };
+
+      return new Promise((res) => {
+        const req = https.request(options, (response: any) => {
+          let data = '';
+          response.on('data', (d: any) => data += d.toString());
+          response.on('end', () => {
+            if (response.statusCode >= 200 && response.statusCode < 300) {
+              console.log(`[Agentapi] Successfully cancelled cascade ${conversationId} via ${endpoint} on port ${port}`);
+              res({ success: true, data: { status: 'cancelled', endpoint } });
+            } else {
+              res(trySend(endpointIdx, portIdx + 1));
+            }
+          });
+        });
+
+        req.on('error', () => {
+          res(trySend(endpointIdx, portIdx + 1));
+        });
+        req.on('timeout', () => {
+          req.destroy();
+          res(trySend(endpointIdx, portIdx + 1));
+        });
+
+        req.write(grpcWebBody);
+        req.end();
+      });
+    };
+
+    return trySend(0, 0);
   }
 
   private async exec<T>(args: string[]): Promise<AgentapiResult<T>> {

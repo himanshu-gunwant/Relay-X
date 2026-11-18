@@ -6,6 +6,7 @@ import '../providers/build_provider.dart';
 import '../repositories/build_repository.dart';
 import '../theme/design_system.dart';
 import '../models/build_artifact.dart';
+import '../services/api_client.dart';
 
 class BuildsScreen extends ConsumerStatefulWidget {
   const BuildsScreen({super.key});
@@ -17,6 +18,41 @@ class BuildsScreen extends ConsumerStatefulWidget {
 class _BuildsScreenState extends ConsumerState<BuildsScreen> {
   final Set<String> _downloadingIds = {};
   final Map<String, double> _downloadProgress = {};
+  List<Map<String, dynamic>> _workspaces = [];
+  bool _isLoadingWorkspaces = false;
+
+  @override
+  void initState() {
+    super.initState();
+    Future.microtask(() => _fetchWorkspaces());
+  }
+
+  Future<void> _fetchWorkspaces() async {
+    setState(() => _isLoadingWorkspaces = true);
+    try {
+      final client = ref.read(apiClientProvider);
+      final list = await client.getWorkspaces();
+      if (mounted) {
+        setState(() {
+          _workspaces = list;
+          final activeWorkspace = ref.read(activeBuildWorkspaceProvider);
+          if (activeWorkspace == null || !_workspaces.any((w) => w['workspace'] == activeWorkspace)) {
+            final general = _workspaces.where((w) => w['name'] == 'General').firstOrNull;
+            final defaultWorkspace = general?['workspace'] as String? ?? (_workspaces.isNotEmpty ? _workspaces.first['workspace'] as String? : null);
+            if (defaultWorkspace != null) {
+              ref.read(activeBuildWorkspaceProvider.notifier).state = defaultWorkspace;
+            }
+          }
+        });
+      }
+    } catch (e) {
+      // Ignore
+    } finally {
+      if (mounted) {
+        setState(() => _isLoadingWorkspaces = false);
+      }
+    }
+  }
 
   Future<void> _downloadAndInstall(BuildArtifact build) async {
     if (_downloadingIds.contains(build.id)) return;
@@ -69,7 +105,7 @@ class _BuildsScreenState extends ConsumerState<BuildsScreen> {
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final buildsAsync = ref.watch(buildsProvider);
-    final buildStatus = ref.watch(buildStatusProvider);
+    final activeWorkspace = ref.watch(activeBuildWorkspaceProvider);
 
     return Scaffold(
       appBar: AppBar(
@@ -93,48 +129,61 @@ class _BuildsScreenState extends ConsumerState<BuildsScreen> {
       ),
       body: Column(
         children: [
-          if (buildStatus != 'Idle')
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              decoration: BoxDecoration(
-                color: buildStatus == 'Failed' 
-                    ? colorScheme.error.withValues(alpha: 0.1) 
-                    : colorScheme.primary.withValues(alpha: 0.05),
-                border: Border(
-                  bottom: BorderSide(
-                    color: buildStatus == 'Failed' 
-                        ? colorScheme.error.withValues(alpha: 0.2) 
-                        : colorScheme.primary.withValues(alpha: 0.1),
-                  ),
-                ),
-              ),
-              width: double.infinity,
-              child: Row(
-                children: [
-                  SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: buildStatus == 'Failed'
-                        ? Icon(Icons.error_outline, color: colorScheme.error, size: 16)
-                        : CircularProgressIndicator(
-                            color: colorScheme.primary,
-                            strokeWidth: 2,
-                          ),
-                  ),
-                  const SizedBox(width: 12),
-                  Text(
-                    buildStatus == 'Failed' ? 'Agent Build Failed' : 'Agent Status: $buildStatus',
-                    style: TextStyle(
-                      color: buildStatus == 'Failed' ? colorScheme.error : colorScheme.primary,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 13,
-                    ),
-                  ),
-                ],
-              ),
+          // Project Dropdown Selector
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: colorScheme.surface,
+              border: Border(bottom: BorderSide(color: colorScheme.outlineVariant)),
             ),
+            child: Row(
+              children: [
+                Icon(Icons.folder_outlined, size: 20, color: colorScheme.primary),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _isLoadingWorkspaces
+                      ? Text('Loading projects...', style: TextStyle(color: colorScheme.onSurfaceVariant))
+                      : DropdownButtonHideUnderline(
+                          child: DropdownButton<String>(
+                            isExpanded: true,
+                            value: _workspaces.any((w) => w['workspace'] == activeWorkspace) 
+                                ? activeWorkspace 
+                                : null,
+                            hint: const Text('Select a Project'),
+                            icon: Icon(Icons.arrow_drop_down, color: colorScheme.onSurfaceVariant),
+                            items: _workspaces.map((w) {
+                              return DropdownMenuItem<String>(
+                                value: w['workspace'] as String,
+                                child: Text(
+                                  w['name'] as String? ?? 'Unnamed Project',
+                                  style: TextStyle(fontWeight: FontWeight.w600, color: colorScheme.onSurface),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              );
+                            }).toList(),
+                            onChanged: (val) {
+                              if (val != null) {
+                                ref.read(activeBuildWorkspaceProvider.notifier).state = val;
+                              }
+                            },
+                          ),
+                        ),
+                ),
+                IconButton(
+                  icon: Icon(Icons.refresh, size: 20, color: colorScheme.onSurfaceVariant),
+                  onPressed: () => ref.invalidate(buildsProvider),
+                  tooltip: 'Refresh Builds',
+                )
+              ],
+            ),
+          ),
           Expanded(
-            child: buildsAsync.when(
+            child: activeWorkspace == null
+                ? Center(
+                    child: Text('Please select a project.',
+                        style: TextStyle(color: colorScheme.onSurfaceVariant)),
+                  )
+                : buildsAsync.when(
               loading: () => Center(
                 child: CircularProgressIndicator(color: colorScheme.primary),
               ),

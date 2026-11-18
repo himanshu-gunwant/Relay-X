@@ -266,7 +266,7 @@ export async function filesRoutes(
         }
       }
 
-      return reply.send({ success: true });
+      return reply.send({ success: true, path: reqPath, absolutePath: targetPath.replace(/\\/g, '/') });
     } catch (err: any) {
       if (err.message === 'Path traversal blocked' || err.message === 'Workspace access not allowed') {
         return reply.status(403).send({ error: err.message });

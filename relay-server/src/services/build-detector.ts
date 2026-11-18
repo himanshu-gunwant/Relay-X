@@ -1,10 +1,9 @@
-import * as chokidar from 'chokidar';
 import * as path from 'path';
 import * as fs from 'fs/promises';
-import { randomUUID, createHash } from 'crypto';
-import EventEmitter from 'events';
-import { Service, RelayEvents } from './types';
+import { createHash } from 'crypto';
+import { Service } from './types';
 import { AntigravityContext } from '../bootstrap/types';
+import fg from 'fast-glob';
 
 export interface BuildArtifact {
   id: string;
@@ -19,7 +18,6 @@ export interface BuildArtifact {
 
 interface BuildPattern {
   name: string;
-  watchDir: string;
   glob: string;
   type: BuildArtifact['type'];
 }
@@ -27,139 +25,118 @@ interface BuildPattern {
 const DEFAULT_PATTERNS: BuildPattern[] = [
   {
     name: 'Flutter APK',
-    watchDir: 'mobile_app/build/app/outputs/flutter-apk',
-    glob: '**/*.apk',
+    glob: '**/build/app/outputs/flutter-apk/**/*.apk',
     type: 'apk',
   },
   {
-    name: 'Flutter AAB',
-    watchDir: 'mobile_app/build/app/outputs/bundle/release',
-    glob: '*.aab',
+    name: 'Android APK',
+    glob: '**/build/app/outputs/apk/**/*.apk',
+    type: 'apk',
+  },
+  {
+    name: 'Android AAB',
+    glob: '**/build/app/outputs/bundle/**/*.aab',
     type: 'aab',
   },
   {
+    name: 'Release APK',
+    glob: '**/{release,dist}/**/*.apk',
+    type: 'apk',
+  },
+  {
     name: 'Web Build',
-    watchDir: 'mobile_app/build/web',
-    glob: 'index.html',
+    glob: '**/{dist,build/web,out}/**/index.html',
     type: 'web',
   },
   {
-    name: 'Dist Build',
-    watchDir: 'dist',
-    glob: '**/*',
+    name: 'Dist/Release Artifacts',
+    glob: '**/{release,dist}/**/*.{exe,zip,dmg}',
     type: 'other',
   },
   {
-    name: 'Release Build',
-    watchDir: 'release',
-    glob: '**/*',
+    name: 'Screenshots',
+    glob: '**/screenshots/**/*.png',
     type: 'other',
   },
 ];
 
-export class BuildDetectorService extends EventEmitter implements Service {
-  private watchers: chokidar.FSWatcher[] = [];
+export class BuildDetectorService implements Service {
   private knownBuilds = new Map<string, BuildArtifact>();
-  private maxHistory = 20;
   
-  public emit<K extends keyof RelayEvents>(event: K, ...args: Parameters<RelayEvents[K]>): boolean {
-    return super.emit(event, ...args);
-  }
-  public on<K extends keyof RelayEvents>(event: K, listener: RelayEvents[K]): this {
-    return super.on(event, listener);
-  }
-
   async start(ctx: AntigravityContext): Promise<void> {
-    for (const pattern of DEFAULT_PATTERNS) {
-      const watchPath = path.join(ctx.workspaceDir, pattern.watchDir);
-      
-      try {
-        await fs.mkdir(watchPath, { recursive: true });
-      } catch (e) {
-        // ignore
-      }
-
-      const watcher = chokidar.watch(
-        watchPath,
-        { 
-          ignoreInitial: false, 
-          awaitWriteFinish: { stabilityThreshold: 2000 },
-          ignored: ['**/*.dm', '**/*.tmp', '**/baselineProfiles/**'],
-        }
-      );
-
-      const filterMatch = (filePath: string): boolean => {
-        const normalized = filePath.replace(/\\/g, '/');
-        if (pattern.glob === '**/*') return true;
-        if (pattern.glob === '*.apk' || pattern.glob === '**/*.apk') return normalized.endsWith('.apk');
-        if (pattern.glob === '*.aab') return normalized.endsWith('.aab');
-        if (pattern.glob === 'index.html') return normalized.endsWith('index.html');
-        return normalized.endsWith(pattern.glob);
-      };
-
-      watcher.on('add', (filePath) => {
-        if (filterMatch(filePath)) this.onArtifactDetected(pattern, filePath);
-      });
-      watcher.on('change', (filePath) => {
-        if (filterMatch(filePath)) this.onArtifactDetected(pattern, filePath);
-      });
-      watcher.on('error', (error) => {
-        console.error(`[BuildDetector] Chokidar watcher error for ${pattern.name}:`, error);
-      });
-      this.watchers.push(watcher);
-    }
+    // No-op. Watchers are removed in favor of stateless on-demand scans.
   }
 
   async stop(): Promise<void> {
-    for (const watcher of this.watchers) {
-      await watcher.close();
-    }
-    this.watchers = [];
+    // No-op
   }
 
   onContextRefresh(ctx: AntigravityContext): void {
-    this.stop().then(() => this.start(ctx));
+    // No-op
   }
 
-  private async onArtifactDetected(pattern: BuildPattern, filePath: string) {
+  /**
+   * Performs an on-demand filesystem scan for build artifacts in a specified workspace.
+   */
+  async scanWorkspace(workspacePath: string): Promise<BuildArtifact[]> {
     try {
-      const stat = await fs.stat(filePath);
-      if (!stat.isFile()) return; // skip directories
-      
-      const id = createHash('md5').update(filePath).digest('hex');
-
-      const artifact: BuildArtifact = {
-        id,
-        name: pattern.name,
-        type: pattern.type,
-        fileName: path.basename(filePath),
-        absolutePath: filePath,
-        sizeBytes: stat.size,
-        detectedAt: new Date().toISOString(),
-        modifiedAt: stat.mtime.toISOString(),
-      };
-
-      if (this.knownBuilds.has(id)) {
-        this.knownBuilds.delete(id); // remove to put it at the end (newest)
-      }
-      this.knownBuilds.set(id, artifact);
-
-      // Enforce max 20
-      if (this.knownBuilds.size > this.maxHistory) {
-        const firstKey = this.knownBuilds.keys().next().value;
-        if (firstKey) this.knownBuilds.delete(firstKey);
+      // Validate workspace path existence
+      const workspaceStat = await fs.stat(workspacePath);
+      if (!workspaceStat.isDirectory()) {
+        throw new Error('Workspace path is not a directory');
       }
 
-      this.emit('build:detected', artifact);
-    } catch (e) {
-      console.error('Error detecting artifact stat', e);
+      const foundArtifacts: BuildArtifact[] = [];
+
+      for (const pattern of DEFAULT_PATTERNS) {
+        const matches = await fg(pattern.glob, {
+          cwd: workspacePath,
+          absolute: true,
+          onlyFiles: true,
+          ignore: ['**/node_modules/**', '**/.git/**', '**/.dart_tool/**'],
+          deep: 8,
+        });
+
+        for (const filePath of matches) {
+          try {
+            const stat = await fs.stat(filePath);
+            const id = createHash('md5').update(filePath).digest('hex');
+
+            const artifact: BuildArtifact = {
+              id,
+              name: pattern.name,
+              type: pattern.type,
+              fileName: path.basename(filePath),
+              absolutePath: filePath,
+              sizeBytes: stat.size,
+              detectedAt: new Date().toISOString(),
+              modifiedAt: stat.mtime.toISOString(),
+            };
+            
+            foundArtifacts.push(artifact);
+            this.knownBuilds.set(id, artifact);
+          } catch (fileErr) {
+            console.warn(`[BuildDetector] Failed to stat file ${filePath}:`, fileErr);
+          }
+        }
+      }
+
+      // Sort by modification time, newest first
+      foundArtifacts.sort((a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime());
+
+      // Limit returned artifacts
+      return foundArtifacts.slice(0, 50);
+
+    } catch (error: any) {
+      console.error(`[BuildDetector] Failed to scan workspace ${workspacePath}:`, error);
+      return [];
     }
   }
 
   listBuilds(): BuildArtifact[] {
-    return Array.from(this.knownBuilds.values()).reverse(); // Newest first
+    return Array.from(this.knownBuilds.values()).reverse();
   }
-
+  
   getBuild(id: string): BuildArtifact | undefined {
     return this.knownBuilds.get(id);
   }

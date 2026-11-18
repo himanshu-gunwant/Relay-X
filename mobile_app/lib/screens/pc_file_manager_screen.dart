@@ -104,7 +104,7 @@ class _PcFileManagerScreenState extends ConsumerState<PcFileManagerScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Project launched successfully on PC!')),
         );
-        Navigator.of(context).pop(true);
+        Navigator.of(context).pop(_currentPath);
       }
     } catch (e) {
       if (mounted) {

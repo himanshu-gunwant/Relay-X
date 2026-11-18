@@ -100,7 +100,7 @@ class _AccountManagerCardState extends ConsumerState<AccountManagerCard> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Switch Account'),
-        content: Text('Are you sure you want to switch to profile "$profileName"? This will restart Antigravity.'),
+        content: Text('Are you sure you want to switch to profile "$profileName"? This will restart the agent.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),

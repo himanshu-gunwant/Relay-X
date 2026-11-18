@@ -20,6 +20,7 @@ import 'services/ssh_service.dart';
 import 'screens/ssh_connections_screen.dart';
 import 'screens/terminal_screen.dart';
 import 'screens/hardware_screen.dart';
+import 'screens/mcp_screen.dart';
 import 'theme/design_system.dart';
 
 void main() async {
@@ -62,7 +63,8 @@ class _MyAppState extends ConsumerState<MyApp> {
           path: '/chat',
           builder: (context, state) {
             final id = state.uri.queryParameters['id'];
-            return ChatScreen(initialConversationId: id);
+            final workspace = state.uri.queryParameters['workspace'];
+            return ChatScreen(initialConversationId: id, initialWorkspace: workspace);
           },
         ),
         GoRoute(
@@ -119,6 +121,10 @@ class _MyAppState extends ConsumerState<MyApp> {
           path: '/hardware',
           builder: (context, state) => const HardwareScreen(),
         ),
+        GoRoute(
+          path: '/mcp',
+          builder: (context, state) => const McpScreen(),
+        ),
       ],
       redirect: (context, state) {
         final configAsync = ref.read(configProvider);
@@ -171,6 +177,7 @@ class _MyAppState extends ConsumerState<MyApp> {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) {
             ref.read(sshServiceProvider).attemptRestoreSessions();
+            ref.read(notificationServiceProvider).syncToken();
           }
         });
       }
@@ -205,7 +212,7 @@ class _MyAppState extends ConsumerState<MyApp> {
     }
 
     return MaterialApp.router(
-      title: 'Antigravity Companion',
+      title: 'Relay-X',
       theme: lightTheme,
       darkTheme: darkTheme,
       themeMode: appearance.themeMode,

@@ -10,8 +10,8 @@ class BuildRepository {
 
   BuildRepository(this._api);
 
-  Future<List<BuildArtifact>> listBuilds() async {
-    final response = await _api.get('/api/builds');
+  Future<List<BuildArtifact>> listBuilds(String workspace) async {
+    final response = await _api.get('/api/builds', queryParameters: {'workspace': workspace});
     return (response.data as List)
         .map((e) => BuildArtifact.fromJson(e))
         .toList();
@@ -33,19 +33,67 @@ class BuildRepository {
       final stat = await file.stat();
       if (stat.size == build.sizeBytes) {
         // Assume it's the same file if size matches perfectly
-        await OpenFilex.open(filePath, type: typeStr);
+        final result = await OpenFilex.open(filePath, type: typeStr);
+        if (result.type != ResultType.done) {
+          throw Exception(result.message.isNotEmpty ? result.message : 'Could not open installer');
+        }
         return;
       }
     }
 
-    await _api.download(
-      build.downloadUrl,
-      filePath,
-      onReceiveProgress: onProgress,
-    );
+    try {
+      await _api.download(
+        build.downloadUrl,
+        filePath,
+        onReceiveProgress: onProgress,
+      );
+    } catch (e) {
+      if (await file.exists()) {
+        try {
+          await file.delete();
+        } catch (_) {}
+      }
+      rethrow;
+    }
 
     // Trigger Android package installer
-    await OpenFilex.open(filePath, type: typeStr);
+    final result = await OpenFilex.open(filePath, type: typeStr);
+    if (result.type != ResultType.done) {
+      throw Exception(result.message.isNotEmpty ? result.message : 'Could not open installer');
+    }
+  }
+
+  Future<void> downloadAndInstallFromPath(
+    String rawPath,
+    String fileName, {
+    Function(int, int)? onProgress,
+  }) async {
+    final dir = await getExternalStorageDirectory() ?? await getApplicationDocumentsDirectory();
+    final filePath = '${dir.path}/$fileName';
+    final file = File(filePath);
+
+    final isApk = fileName.toLowerCase().endsWith('.apk');
+    final typeStr = isApk ? 'application/vnd.android.package-archive' : null;
+
+    try {
+      await _api.download(
+        '/api/builds/raw?path=${Uri.encodeComponent(rawPath)}',
+        filePath,
+        onReceiveProgress: onProgress,
+      );
+    } catch (e) {
+      if (await file.exists()) {
+        try {
+          await file.delete();
+        } catch (_) {}
+      }
+      rethrow;
+    }
+
+    final result = await OpenFilex.open(filePath, type: typeStr);
+    if (result.type != ResultType.done) {
+      throw Exception(result.message.isNotEmpty ? result.message : 'Could not open installer');
+    }
   }
 }
 

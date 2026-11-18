@@ -110,8 +110,8 @@ export class OverviewService {
             }
           }
 
-          // Parse actual subagent conversation IDs from the INVOKE_SUBAGENT tool result
-          if (step.type === 'INVOKE_SUBAGENT' && step.content) {
+          // Parse actual subagent conversation IDs from tool results
+          if ((step.type === 'INVOKE_SUBAGENT' || step.type === 'GENERIC') && step.content) {
             const jsonMatches = step.content.match(/\{[\s\S]*?\}/g);
             if (jsonMatches) {
               for (const jsonStr of jsonMatches) {
@@ -134,21 +134,42 @@ export class OverviewService {
               const args = call.args || {};
               
               if (call.name === 'invoke_subagent') {
-                let subagentsList: any[] = [];
-                if (typeof args.Subagents === 'string') {
-                  try {
-                    subagentsList = JSON.parse(args.Subagents);
-                  } catch (e) {}
-                } else if (Array.isArray(args.Subagents)) {
-                  subagentsList = args.Subagents;
-                }
-                
-                for (const agent of subagentsList) {
+                if (args.Role || args.TypeName) {
                   pendingSubagents.push({
-                    name: agent.Role || agent.TypeName || 'Subagent',
-                    type: agent.TypeName || 'Unknown'
+                    name: args.Role || args.TypeName || 'Subagent',
+                    type: args.TypeName || 'Unknown'
                   });
+                } else if (args.Subagents) {
+                  let subagentsList: any[] = [];
+                  if (typeof args.Subagents === 'string') {
+                    try {
+                      subagentsList = JSON.parse(args.Subagents);
+                    } catch (e) {}
+                  } else if (Array.isArray(args.Subagents)) {
+                    subagentsList = args.Subagents;
+                  }
+                  
+                  for (const agent of subagentsList) {
+                    pendingSubagents.push({
+                      name: agent.Role || agent.TypeName || 'Subagent',
+                      type: agent.TypeName || 'Unknown'
+                    });
+                  }
                 }
+              } else if (call.name === 'write_file' && (args.Path || args.TargetFile)) {
+                const target = args.Path || args.TargetFile;
+                const linesCount = args.Content ? args.Content.split('\n').length : (args.CodeContent ? args.CodeContent.split('\\n').length : 0);
+                const current = fileMap.get(target) || { additions: 0, deletions: 0 };
+                current.additions += linesCount;
+                fileMap.set(target, current);
+              } else if (call.name === 'edit_file' && (args.Path || args.TargetFile)) {
+                const target = args.Path || args.TargetFile;
+                const targetLines = args.Target ? args.Target.split('\n').length : 0;
+                const replLines = args.Replacement ? args.Replacement.split('\n').length : 0;
+                const current = fileMap.get(target) || { additions: 0, deletions: 0 };
+                current.additions += replLines;
+                current.deletions += targetLines;
+                fileMap.set(target, current);
               } else if (call.name === 'write_to_file' && args.TargetFile) {
                 const target = args.TargetFile;
                 const linesCount = args.CodeContent ? args.CodeContent.split('\\n').length : 0;

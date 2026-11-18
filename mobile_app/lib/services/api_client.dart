@@ -11,10 +11,17 @@ class ApiClient {
 
   ApiClient(this._dio);
 
-  Future<bool> checkHealth() async {
+  Future<bool> checkHealth({void Function(String mac)? onMacDiscovered}) async {
     try {
       final response = await _dio.get('/api/health');
-      return response.statusCode == 200 && response.data['status'] == 'connected';
+      final isConnected = response.statusCode == 200 && response.data['status'] == 'connected';
+      if (isConnected && response.data['macAddress'] != null) {
+        final mac = response.data['macAddress'].toString();
+        if (mac.isNotEmpty && onMacDiscovered != null) {
+          onMacDiscovered(mac);
+        }
+      }
+      return isConnected;
     } catch (e) {
       return false;
     }
@@ -102,15 +109,26 @@ class ApiClient {
     }
   }
 
+  Future<List<Map<String, dynamic>>> getWorkspaces() async {
+    try {
+      final response = await _dio.get('/api/workspaces');
+      final data = response.data['workspaces'] as List<dynamic>;
+      return data.cast<Map<String, dynamic>>();
+    } catch (e) {
+      return [];
+    }
+  }
+
   /// Creates a new conversation session. No prompt is sent at creation time;
   /// the user's first message is sent via [sendMessage].
-  Future<String> createConversation(String prompt, {String? model, String? selectedModel, Map<String, String>? modelChange}) async {
+  Future<String> createConversation(String prompt, {String? model, String? selectedModel, Map<String, String>? modelChange, String? workspace}) async {
     try {
       final response = await _dio.post('/api/conversations', data: {
         'prompt': prompt,
         'model': ?model,
         'selectedModel': ?selectedModel,
         'modelChange': ?modelChange,
+        'workspace': ?workspace,
       });
       final id = response.data['id'];
       if (id == null || id is! String || id.isEmpty) {
@@ -131,6 +149,15 @@ class ApiClient {
       });
     } on Exception catch (e) {
       throw Exception('Failed to send message: $e');
+    }
+  }
+
+  /// Cancels / interrupts the currently running turn in the conversation
+  Future<void> cancelConversation(String id) async {
+    try {
+      await _dio.post('/api/conversations/$id/cancel');
+    } on Exception catch (e) {
+      throw Exception('Failed to cancel conversation: $e');
     }
   }
 
@@ -215,7 +242,7 @@ class ApiClient {
     }
   }
 
-  Future<void> createFileOrFolder({
+  Future<Map<String, dynamic>> createFileOrFolder({
     required String path,
     required String type,
     String content = '',
@@ -223,13 +250,14 @@ class ApiClient {
     bool base64Encoded = false,
   }) async {
     try {
-      await _dio.post('/api/files', data: {
+      final response = await _dio.post('/api/files', data: {
         'path': path,
         'type': type,
         'content': content,
         'workspace': workspace,
         'base64Encoded': base64Encoded,
       });
+      return response.data is Map<String, dynamic> ? Map<String, dynamic>.from(response.data) : {'success': true};
     } on Exception catch (e) {
       throw Exception('Failed to create $type: $e');
     }
@@ -399,6 +427,9 @@ class ApiClient {
       path,
       savePath,
       onReceiveProgress: onReceiveProgress,
+      options: Options(
+        receiveTimeout: const Duration(minutes: 5),
+      ),
     );
   }
 
@@ -411,6 +442,24 @@ class ApiClient {
       });
     } catch (e) {
       throw Exception('Failed to register device: $e');
+    }
+  }
+
+  Future<Map<String, dynamic>> getNotificationStatus() async {
+    try {
+      final res = await _dio.get('/api/notifications/status');
+      return Map<String, dynamic>.from(res.data);
+    } catch (e) {
+      throw Exception('Failed to get notification status: $e');
+    }
+  }
+
+  Future<Map<String, dynamic>> sendTestNotification() async {
+    try {
+      final res = await _dio.post('/api/notifications/test', data: {});
+      return Map<String, dynamic>.from(res.data);
+    } catch (e) {
+      throw Exception('Failed to send test notification: $e');
     }
   }
 
@@ -429,6 +478,44 @@ class ApiClient {
       return response.data as Map<String, dynamic>;
     } on Exception catch (e) {
       throw Exception('Failed to load telemetry: $e');
+    }
+  }
+
+  // ============ Customizations & MCP ============
+
+  Future<List<dynamic>> getMcpServers() async {
+    try {
+      final response = await _dio.get('/api/customizations/mcp');
+      if (response.data is Map && response.data['states'] != null) {
+        return response.data['states'] as List<dynamic>;
+      }
+      return [];
+    } on Exception catch (e) {
+      throw Exception('Failed to fetch MCP servers: $e');
+    }
+  }
+
+  Future<List<dynamic>> getSkills() async {
+    try {
+      final response = await _dio.get('/api/customizations/skills');
+      if (response.data is Map && response.data['skills'] != null) {
+        return response.data['skills'] as List<dynamic>;
+      }
+      return [];
+    } on Exception catch (e) {
+      throw Exception('Failed to fetch skills: $e');
+    }
+  }
+
+  Future<List<dynamic>> getPlugins() async {
+    try {
+      final response = await _dio.get('/api/customizations/plugins');
+      if (response.data is Map && response.data['plugins'] != null) {
+        return response.data['plugins'] as List<dynamic>;
+      }
+      return [];
+    } on Exception catch (e) {
+      throw Exception('Failed to fetch plugins: $e');
     }
   }
 

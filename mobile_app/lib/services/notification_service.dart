@@ -31,9 +31,13 @@ Future<String> _getOrCreateDeviceId() async {
 class NotificationService {
   final ApiClient _apiClient;
   bool _initialized = false;
+  String? _cachedFcmToken;
+  bool isTokenRegistered = false;
 
   final _clickController = StreamController<String>.broadcast();
   Stream<String> get clickStream => _clickController.stream;
+  String? get fcmToken => _cachedFcmToken;
+  bool get isInitialized => _initialized;
   
   StreamSubscription? _onMessageSub;
   StreamSubscription? _onMessageOpenedAppSub;
@@ -95,12 +99,14 @@ class NotificationService {
       // 5. Register device and FCM token with backend
       final token = await messagingInstance.getToken();
       if (token != null) {
+        _cachedFcmToken = token;
         debugPrint('[NotificationService] Active FCM Token: $token');
         await _registerToken(token);
       }
 
       // Listen for token updates
       _onTokenRefreshSub = messagingInstance.onTokenRefresh.listen((newToken) async {
+        _cachedFcmToken = newToken;
         debugPrint('[NotificationService] FCM Token refreshed: $newToken');
         await _registerToken(newToken);
       });
@@ -124,14 +130,29 @@ class NotificationService {
     }
   }
 
-  Future<void> _registerToken(String token) async {
+  Future<bool> _registerToken(String token) async {
     try {
       final deviceId = await _getOrCreateDeviceId();
       debugPrint('[NotificationService] Sending token registration to backend: Device ID: $deviceId');
       await _apiClient.registerDevice(deviceId, token, 'android');
+      isTokenRegistered = true;
       debugPrint('[NotificationService] Token registered successfully on backend.');
+      return true;
     } catch (e) {
       debugPrint('[NotificationService] Token registration failed: $e');
+      return false;
+    }
+  }
+
+  Future<bool> syncToken({bool force = false}) async {
+    try {
+      final token = _cachedFcmToken ?? await FirebaseMessaging.instance.getToken();
+      if (token == null) return false;
+      _cachedFcmToken = token;
+      return await _registerToken(token);
+    } catch (e) {
+      debugPrint('[NotificationService] syncToken failed: $e');
+      return false;
     }
   }
 

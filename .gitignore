@@ -34,21 +34,33 @@ package-lock.json
 .env.test
 .env.production
 
-# Antigravity specific
+# Antigravity & Relay-X specific & runtime artifacts
 .antigravity/
 .antigravity-tokens.json
+.relay-x-tokens.json
 relay-server/relay_log.txt
 relay-server/relay_server_debug.log
 relay-server/capture_log.txt
 relay-server/network_log.json
 relay-server/blob.bin
+relay-server/service.log
+relay-server/log_relay.txt
+network_log.json
+recovered_edits.json
+user_msgs.json
 
 # Build outputs
+build/
+**/build/
+.gradle/
+**/.gradle/
 /dist/
 /release/
 relay-server/dist/
 relay-server/release/
 mobile_app/build/
+mobile_app/android/build/
+mobile_app/android/.gradle/
 
 # Temporary and Scratch Files
 scratch/
@@ -58,6 +70,12 @@ tmp/
 *.bak
 *.swp
 *~
+test*.js
+test_*.js
+relay-server/test*.js
+relay-server/test_*.js
 
 # Credentials
 relay-server/credentials/
+*.keystore
+*.jks

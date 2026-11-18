@@ -30,7 +30,7 @@ export class TranscriptWatcherService extends EventEmitter implements Service {
     // and filter to only transcript_full.jsonl files in event handlers.
     this.watcher = chokidar.watch(this.brainDir, {
       persistent: true,
-      ignoreInitial: true,
+      ignoreInitial: false,
       awaitWriteFinish: {
         stabilityThreshold: 200,
         pollInterval: 100
@@ -103,9 +103,15 @@ export class TranscriptWatcherService extends EventEmitter implements Service {
         // Basic UUID check
         if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(conversationId)) continue;
         
-        const transcriptPath = path.join(this.brainDir, conversationId, '.system_generated', 'logs', 'transcript_full.jsonl');
+        let transcriptPath = path.join(this.brainDir, conversationId, '.system_generated', 'logs', 'transcript_full.jsonl');
         try {
-          const stats = await fs.stat(transcriptPath);
+          let stats;
+          try {
+            stats = await fs.stat(transcriptPath);
+          } catch (e) {
+            transcriptPath = path.join(this.brainDir, conversationId, '.system_generated', 'logs', 'transcript.jsonl');
+            stats = await fs.stat(transcriptPath);
+          }
           let title = this.titleCache.get(conversationId);
           
           if (!title) {
@@ -130,25 +136,54 @@ export class TranscriptWatcherService extends EventEmitter implements Service {
           let project = 'General';
           let workspace = this.workspaceDir;
           try {
-            const dbPath = path.join(this.brainDir, '..', 'conversations', `${conversationId}.db`);
-            let gotProject = false;
+            // 1. Try parsing the project name from the Cwd or DirectoryPath of the first few tool calls
+            const content = await fs.readFile(transcriptPath, 'utf-8');
+            const lines = content.split('\n').filter(l => l.trim().length > 0);
+            
+            for (const line of lines.slice(0, 100)) {
+              try {
+                const step = JSON.parse(line);
+                if (step.tool_calls) {
+                  let foundPath: string | null = null;
+                  for (const tc of step.tool_calls) {
+                    if (tc.args && tc.args.Cwd) {
+                      foundPath = tc.args.Cwd;
+                      break;
+                    }
+                    if (tc.args && tc.args.DirectoryPath) {
+                      foundPath = tc.args.DirectoryPath;
+                      break;
+                    }
+                  }
+                  if (foundPath) {
+                    foundPath = foundPath.replace(/^"|"$/g, '').trim();
+                    const normalized = foundPath.replace(/\\/g, '/');
+                    project = this.getProjectFromPath(normalized);
+                    workspace = normalized;
+                    break;
+                  }
+                }
+              } catch (e) {}
+            }
 
-            // 1. Try querying the SQLite db using the sqlite3 CLI for the exact main workspace
-            try {
-              const { exec } = await import('child_process');
-              const { promisify } = await import('util');
-              const execAsync = promisify(exec);
-              const { stdout } = await execAsync(`sqlite3 "${dbPath}" "PRAGMA busy_timeout = 3000; SELECT cast(data as text) FROM trajectory_metadata_blob WHERE id = 'main';"`);
-              const match = stdout.match(/file:\/\/\/[a-zA-Z0-9%\-._~:\/ ]+/);
-              if (match) {
-                const uri = match[0];
-                const decoded = decodeURIComponent(uri);
-                project = decoded.split('/').pop() || 'General';
-                workspace = decoded.replace(/^file:\/\/\//, '');
+            // 2. Fallback to querying the SQLite db if still 'General'
+            if (project === 'General') {
+              try {
+                const dbPath = path.join(this.brainDir, '..', 'conversations', `${conversationId}.db`);
+                const { exec } = await import('child_process');
+                const { promisify } = await import('util');
+                const execAsync = promisify(exec);
+                const { stdout } = await execAsync(`sqlite3 "${dbPath}" "PRAGMA busy_timeout = 3000; SELECT cast(data as text) FROM trajectory_metadata_blob WHERE id = 'main';"`);
+                const match = stdout.match(/file:\/\/\/[a-zA-Z0-9%\-._~:\/ ]+/);
+                if (match) {
+                  const uri = match[0];
+                  const decoded = decodeURIComponent(uri);
+                  workspace = decoded.replace(/^file:\/\/\//, '');
+                  project = this.getProjectFromPath(workspace);
+                }
+              } catch (err) {
+                // CLI query failed or sqlite3 not installed
               }
-            } catch (err) {
-              // CLI query failed, locked, or sqlite3 not installed.
-              // Fallback to defaults (this.workspaceDir).
             }
 
             // Clean up any trailing binary control characters or replacement characters (e.g. \uFFFD)
@@ -160,7 +195,7 @@ export class TranscriptWatcherService extends EventEmitter implements Service {
               project = 'Subagents';
             }
           } catch (e) {
-            // Fallback to General if DB parsing fails
+            // Fallback to General if parsing fails
           }
 
           results.push({
@@ -188,7 +223,6 @@ export class TranscriptWatcherService extends EventEmitter implements Service {
 
   private async onFileAdded(filePath: string) {
     const conversationId = this.extractConversationId(filePath);
-    this.lastState.set(conversationId, { lineCount: 0, lastLineLength: 0 });
     
     // Automatically self-heal both log files if they contain trailing corrupted lines from crashes
     const dir = path.dirname(filePath);
@@ -196,7 +230,17 @@ export class TranscriptWatcherService extends EventEmitter implements Service {
     await this.selfHealLogFile(filePath);
     await this.selfHealLogFile(transcriptPath);
 
-    await this.readNewLines(conversationId, filePath);
+    // Initialize state to the end of the file to prevent flooding historical messages on startup
+    try {
+      const content = await fs.readFile(filePath, 'utf-8');
+      const lines = content.split('\n').filter(line => line.trim().length > 0);
+      this.lastState.set(conversationId, { 
+        lineCount: lines.length, 
+        lastLineLength: lines.length > 0 ? lines[lines.length - 1].length : 0 
+      });
+    } catch (e) {
+      this.lastState.set(conversationId, { lineCount: 0, lastLineLength: 0 });
+    }
   }
 
   private async selfHealLogFile(filePath: string) {
@@ -319,7 +363,7 @@ export class TranscriptWatcherService extends EventEmitter implements Service {
 
     switch (raw.type) {
       case 'USER_INPUT':
-        if (raw.content?.includes('<USER_SETTINGS_CHANGE>')) {
+        if (raw.content?.includes('<USER_SETTINGS_CHANGE>') && !raw.content?.includes('<USER_REQUEST>')) {
           category = 'system_info';
           summary = 'Model selection updated';
         } else {
@@ -356,8 +400,11 @@ export class TranscriptWatcherService extends EventEmitter implements Service {
       case 'WRITE_FILE':
       case 'REPLACE_FILE_CONTENT':
       case 'READ_URL_CONTENT':
+      case 'INVOKE_SUBAGENT':
+      case 'CALL_MCP_TOOL':
+      case 'GENERIC':
         category = 'tool_result';
-        summary = `${raw.type}: ${this.truncate(raw.content || '', 80)}`;
+        summary = raw.type === 'GENERIC' ? `Tool Result: ${this.truncate(raw.content || '', 80)}` : `${raw.type}: ${this.truncate(raw.content || '', 80)}`;
         break;
 
       case 'ERROR_MESSAGE':
@@ -401,7 +448,10 @@ export class TranscriptWatcherService extends EventEmitter implements Service {
 
   private extractUserPrompt(content: string): string {
     const match = content.match(/<USER_REQUEST>\s*([\s\S]*?)\s*<\/USER_REQUEST>/);
-    return match ? match[1] : content;
+    let result = match ? match[1] : content;
+    result = result.replace(/<ADDITIONAL_METADATA>[\s\S]*?<\/ADDITIONAL_METADATA>/g, '');
+    result = result.replace(/<USER_SETTINGS_CHANGE>[\s\S]*?<\/USER_SETTINGS_CHANGE>/g, '');
+    return result.trim();
   }
 
   private extractRelayedUserMessage(content: string): string {
@@ -413,5 +463,27 @@ export class TranscriptWatcherService extends EventEmitter implements Service {
   private truncate(str: string, len: number): string {
     if (str.length <= len) return str;
     return str.substring(0, len) + '...';
+  }
+
+  private getProjectFromPath(filePath: string): string {
+    const normalized = filePath.replace(/\\/g, '/');
+    const parts = normalized.split('/').filter(p => p.length > 0);
+    if (parts.length === 0) return 'General';
+    
+    if (parts[0].toLowerCase().startsWith('d:')) {
+      return parts[1] || parts[0];
+    }
+    
+    if (parts[0].toLowerCase().startsWith('c:') && parts[1]?.toLowerCase() === 'users' && parts[2]) {
+      if (parts[3] === '.gemini' && parts[4] === 'antigravity') {
+        return 'Antigravity';
+      }
+      if (['desktop', 'documents', 'source', 'repos'].includes(parts[3]?.toLowerCase())) {
+        return parts[4] || parts[3];
+      }
+      return parts[3] || 'General';
+    }
+    
+    return parts[parts.length - 1] || 'General';
   }
 }

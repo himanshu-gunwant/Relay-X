@@ -3,7 +3,7 @@ import path from 'path';
 import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 
-async function setup() {
+export async function setup() {
   const envPath = path.resolve('.env');
   const apiKey = crypto.randomBytes(24).toString('hex'); // 48 chars
   const hash = await bcrypt.hash(apiKey, 10);
@@ -15,7 +15,7 @@ async function setup() {
     // File doesn't exist, we will create it
   }
 
-  const workspacePath = 'd:\\Antigravity Companion';
+  const workspacePath = process.cwd();
   
   // Parse existing content
   const lines = envContent.split(/\r?\n/);
@@ -28,7 +28,7 @@ async function setup() {
       newLines.push(`API_KEY_HASH=${hash}`);
       foundApiKeyHash = true;
     } else if (line.startsWith('WORKSPACE_DIR=')) {
-      newLines.push(`WORKSPACE_DIR=${workspacePath}`);
+      newLines.push(`WORKSPACE_DIR=${line.substring('WORKSPACE_DIR='.length) || workspacePath}`);
       foundWorkspaceDir = true;
     } else {
       if (line.trim() || line !== '') {
@@ -47,13 +47,15 @@ async function setup() {
   await fs.writeFile(envPath, newLines.join('\n') + '\n', 'utf-8');
 
   console.log('==================================================');
-  console.log('         Antigravity Relay Server Setup          ');
+  console.log('              Relay-X Server Setup                ');
   console.log('==================================================');
   console.log('API key generated successfully and saved to .env.\n');
-  console.log('Please copy this key and configure your Flutter app:');
+  console.log('Please copy this key and configure your mobile app:');
   console.log('\x1b[32m%s\x1b[0m', apiKey);
   console.log('\nKeep this key secure. Re-run setup to rotate keys.');
   console.log('==================================================');
 }
 
-setup().catch(console.error);
+if (process.argv[1] && process.argv[1].endsWith('setup.ts')) {
+  setup().catch(console.error);
+}

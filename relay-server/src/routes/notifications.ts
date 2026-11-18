@@ -29,4 +29,27 @@ export async function notificationRoutes(
       return reply.status(500).send({ error: 'Failed to register device token', details: err.message });
     }
   });
+
+  fastify.get('/status', async (request, reply) => {
+    return reply.send({
+      activeTokens: notificationService.getActiveTokenCount(),
+      providerReady: notificationService.isProviderReady(),
+    });
+  });
+
+  fastify.post('/test', async (request, reply) => {
+    const activeTokens = notificationService.getActiveTokenCount();
+    notificationService.dispatch({
+      category: 'response_ready',
+      title: 'Antigravity Test',
+      body: 'Push notifications are configured and active!',
+      priority: 'high',
+      deduplicationKey: `test_push_${Date.now()}`
+    });
+    return reply.send({
+      success: true,
+      message: 'Test notification dispatched',
+      activeTokens
+    });
+  });
 }

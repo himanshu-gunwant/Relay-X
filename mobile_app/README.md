@@ -1,6 +1,6 @@
-# Antigravity Companion - Mobile App
+# Relay-X - Mobile App
 
-The mobile client for the Antigravity Companion system, built with Flutter.
+The mobile client for the Relay-X cross-device agent bridge, built with Flutter.
 
 ## Setup Instructions
 

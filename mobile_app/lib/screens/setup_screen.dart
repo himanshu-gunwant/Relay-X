@@ -97,8 +97,16 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 // Header
+                Center(
+                  child: Image.asset(
+                    'assets/relay_x_logo.png',
+                    height: 44,
+                    errorBuilder: (context, error, stackTrace) => const SizedBox.shrink(),
+                  ),
+                ),
+                const SizedBox(height: 16),
                 Text(
-                  'ANTIGRAVITY',
+                  'RELAY-X',
                   style: Theme.of(context).textTheme.headlineLarge?.copyWith(
                     letterSpacing: 2.0,
                     fontWeight: FontWeight.w700,
@@ -107,17 +115,17 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'MOBILE COMPANION',
+                  'CROSS-DEVICE AGENT BRIDGE',
                   style: Theme.of(context).textTheme.labelSmall,
                   textAlign: TextAlign.center,
                 ),
-                const SizedBox(height: 64),
+                const SizedBox(height: 48),
                 
                 // Form
                 TextField(
                   controller: _urlController,
                   decoration: InputDecoration(
-                    labelText: 'Relay Server URL',
+                    labelText: 'Relay-X Server URL',
                     prefixIcon: Icon(Icons.hub_outlined, color: colorScheme.secondaryContainer),
                   ),
                   keyboardType: TextInputType.url,

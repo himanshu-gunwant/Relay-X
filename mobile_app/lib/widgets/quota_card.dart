@@ -80,21 +80,69 @@ class ModelQuotaCard extends ConsumerWidget {
   Widget _buildQuotaGroup(BuildContext context, Map<String, dynamic> group) {
     final colorScheme = Theme.of(context).colorScheme;
     final displayName = group['displayName'] as String? ?? 'Models';
+    final description = group['description'] as String?;
     final buckets = group['buckets'] as List<dynamic>? ?? [];
 
+    // Check if any bucket is exhausted
+    final warningBucket = buckets.firstWhere(
+      (b) => (b['remainingFraction'] as num?)?.toDouble() == 0.0 && b['description'] != null,
+      orElse: () => null,
+    );
+
     return Padding(
-      padding: const EdgeInsets.only(bottom: 16.0),
+      padding: const EdgeInsets.only(bottom: 20.0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            displayName,
-            style: TextStyle(
-              color: colorScheme.onSurface,
-              fontWeight: FontWeight.w600,
-              fontSize: 14,
-            ),
+          Row(
+            children: [
+              Text(
+                displayName,
+                style: TextStyle(
+                  color: colorScheme.onSurface,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 14,
+                ),
+              ),
+              if (description != null) ...[
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    description,
+                    style: TextStyle(
+                      color: colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
+                      fontSize: 11,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ],
           ),
+          if (warningBucket != null) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: colorScheme.errorContainer.withValues(alpha: 0.4),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: colorScheme.error.withValues(alpha: 0.3)),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.info_outline, size: 14, color: colorScheme.error),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      warningBucket['description'] as String,
+                      style: TextStyle(color: colorScheme.onErrorContainer, fontSize: 11),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: 12),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,

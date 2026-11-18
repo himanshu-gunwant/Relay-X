@@ -4,7 +4,11 @@ $ErrorActionPreference = "Stop"
 $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 
 # Define task parameters
-$taskName = "AntigravityAutoLock"
+$taskName = "RelayXAutoLock"
+$legacyTask = "AntigravityAutoLock"
+if (Get-ScheduledTask -TaskName $legacyTask -ErrorAction SilentlyContinue) {
+    Unregister-ScheduledTask -TaskName $legacyTask -Confirm:$false -ErrorAction SilentlyContinue
+}
 
 # We run via PowerShell with a hidden window and a 3-second delay to allow the Windows session to initialize first.
 # Otherwise, running LockWorkStation immediately during the logon sequence can fail silently.
